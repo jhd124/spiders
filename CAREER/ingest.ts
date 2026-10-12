@@ -35,8 +35,31 @@ function upsert(db: Database.Database, table: string, key: string[], rows: Recor
 
 const b = (v: boolean) => (v ? 1 : 0);
 
+/** 只授工学 / 可授工学 + console label (mirrors migration 004). */
+export function degreeFields(cats: string[]) {
+  const eng = cats.includes('工学');
+  const others = cats.filter((c) => c !== '工学');
+  return {
+    engineering_degree_type: eng ? (others.length ? 'optional' : 'only') : null,
+    degree_display: eng
+      ? others.length ? `可授工学/${others.join('/')}` : '只授工学'
+      : cats.length > 1 ? `可授${cats.join('/')}` : `授${cats[0] ?? ''}`,
+  };
+}
+
+/** Expert review of the occupation table (2026-10-12): valid while the mirror file is byte-identical. */
+const OCC_REVIEW = {
+  sha256: 'e2c9eb0ed21981139e33f7ed503dd7b5e851458c9f53b6428737962fb8d3a236',
+  note: 'expert 2026-10-12',
+  nameSource: 'official-2022 (via mirror:cccac, expert-verified)',
+};
+
 function csv(file: string): Record<string, string>[] {
-  const [head = '', ...lines] = readFileSync(join(HERE, 'seeds', file), 'utf8').trim().split(/\r?\n/);
+  return csvFile(join(HERE, 'seeds', file));
+}
+
+function csvFile(path: string): Record<string, string>[] {
+  const [head = '', ...lines] = readFileSync(path, 'utf8').trim().split(/\r?\n/);
   const cols = head.split(',');
   return lines.map((l) => Object.fromEntries(l.split(',').map((v, i) => [cols[i], v.trim()])));
 }
@@ -107,6 +130,7 @@ function ingestMajors(db: Database.Database) {
         category_code: m.category_code, category_name: m.category_name,
         class_code: m.class_code, class_name: m.class_name,
         is_special: b(m.is_special), is_controlled: b(m.is_controlled), is_engineering: b(m.is_engineering),
+        ...degreeFields(m.degree_categories),
         degree_categories: m.degree_categories.join('|'), degree_note: m.degree_note, former_code: m.former_code,
         duration_years: null, added_year: null, first_catalog_edition: earliestWith(m.base_code),
         status: isLatest ? '在目录' : '已移出目录', catalog_edition: p.edition,
@@ -134,6 +158,10 @@ function ingestOccupations(db: Database.Database) {
   const c = JSON.parse(readFileSync(cleanPath('career-occupations'), 'utf8')) as { doc: DocMeta; occupations: Occupation[] };
   upsert(db, 'source_document', ['id'], [docRow(c.doc)]);
   const now = new Date().toISOString();
+  const reviewedOk = c.doc.sha256 === OCC_REVIEW.sha256;
+  if (!reviewedOk) console.warn('[career] occupation source changed since the expert review -> rows marked reviewed=0');
+  const diff = csvFile(join(HERE, 'review', 'occupation_name_diff.csv')) as { code: string; decision: string; alias_added: string }[];
+  const decided = new Set(diff.filter((r) => r.decision.startsWith('use imported')).map((r) => r.code));
   const rows = [...c.occupations]
     .sort((a, b) => a.level - b.level)
     .map((o) => ({
@@ -141,8 +169,10 @@ function ingestOccupations(db: Database.Database) {
       gbm_code: o.gbm_code, is_digital: b(o.is_digital), is_green: b(o.is_green),
       edition: c.doc.doc.edition, source_batch: '大典2022', status: '有效',
       source_url: c.doc.doc.url, source_doc_id: c.doc.doc.id, source_page: o.page, fetched_at: c.doc.fetched_at,
-      extraction_method: 'pdf_parse', confidence: c.doc.doc.is_official ? 1 : 0.9, reviewed: 0, updated_at: now,
-      name_source: c.doc.doc.is_official ? 'official' : 'mirror:cccac',
+      extraction_method: 'pdf_parse', confidence: c.doc.doc.is_official ? 1 : 0.9, updated_at: now,
+      name_source: c.doc.doc.is_official ? 'official' : decided.has(o.code) && reviewedOk ? OCC_REVIEW.nameSource : 'mirror:cccac',
+      reviewed: reviewedOk ? 1 : 0,
+      reviewer_note: reviewedOk ? OCC_REVIEW.note : null,
       digital_flag_source: o.is_digital ? 'mirror:cccac' : null,
       green_flag_source: o.is_green ? 'mirror:cccac' : null,
     }));
@@ -150,6 +180,18 @@ function ingestOccupations(db: Database.Database) {
   const by = (l: number) => rows.filter((r) => r.level === l).length;
   console.log(`[career] occupations: upserted ${n} (大类 ${by(1)}, 中类 ${by(2)}, 小类 ${by(3)}, 细类 ${by(4)})`);
   fillFlagsFromDraft(db);
+  // 公示稿 old names as aliases (expert 2026-10-12); never point an alias at a code whose current name differs from it elsewhere
+  const exists = db.prepare('SELECT code FROM occupation WHERE name = ?');
+  let na = 0;
+  for (const r of diff.filter((r) => r.alias_added)) {
+    const clash = exists.get(r.alias_added) as { code: string } | undefined;
+    if (clash) throw new Error(`alias ${r.alias_added} for ${r.code} is the current name of ${clash.code}`);
+    na += upsert(db, 'occupation_alias', ['occupation_code', 'alias'], [
+      { occupation_code: r.code, alias: r.alias_added, alias_type: '公示稿旧称', source: '公示稿 2022-07 (expert 2026-10-12)' },
+    ]);
+  }
+  db.prepare(`UPDATE occupation SET aliases = (SELECT GROUP_CONCAT(a.alias, '|') FROM occupation_alias a WHERE a.occupation_code = occupation.code)`).run();
+  console.log(`[career] occupation aliases: ${na}; reviewed=${reviewedOk ? 1 : 0}`);
 }
 
 const DRAFT_URL = 'https://file.m12333.cn/upfile/download/063d5abb-fada-f27f-a1e8-3de63b44d5df.pdf';

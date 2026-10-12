@@ -4,6 +4,8 @@ Offline helper (needs poppler `pdftotext`; not run on the server).
 Reads the 《职业分类大典（2022年版）》社会公示稿 正文 PDF and writes:
   CAREER/seeds/occupation_draft_2022.csv   code,name,flag  (细类 as printed in the 公示稿; flag = S | L | L/S | '')
   CAREER/review/occupation_name_diff.csv   细类 whose imported name != a single-line 公示稿 name
+    (the committed CSV additionally carries the expert's decision / alias_added / decided_by columns, added by hand
+     on 2026-10-12; re-running this script overwrites them, so don't)
 Usage:
   curl -A 'spiders-bot/0.1 (+https://github.com/jhd124/spiders)' -o draft.pdf \
     https://file.m12333.cn/upfile/download/063d5abb-fada-f27f-a1e8-3de63b44d5df.pdf
