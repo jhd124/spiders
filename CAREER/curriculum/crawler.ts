@@ -7,10 +7,11 @@
  * Rows that fail are recorded with their error; the rest continue.
  */
 import { rawPath, readJson, writeJson } from '../../lib/io.js';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { isMain } from '../../lib/main.js';
 import { readManifest, type CurriculumSource } from './manifest.js';
-import { fetchFile, type FetchedFile } from './fetch.js';
+import { CURRICULUM_RAW, fetchFile, type FetchedFile } from './fetch.js';
 import { planUnits, type SectionInfo } from './plan.js';
 import { extractText, textQuality, type PageText } from './text.js';
 
@@ -29,6 +30,11 @@ export async function crawl(argv = process.argv.slice(2)): Promise<RawCurriculum
   const prev = existsSync(rawPath(RAW_NAME)) ? await readJson<RawCurriculum>(rawPath(RAW_NAME)).catch(() => null) : null;
   const out: RawCurriculum = { scrapedAt: new Date().toISOString(), docs: [] };
   const ids = new Set(readManifest().map((r) => r.id));
+  // sources removed from the manifest: drop their cached original files so they are never reused
+  if (existsSync(CURRICULUM_RAW)) for (const f of readdirSync(CURRICULUM_RAW)) {
+    const id = f.replace(/\.[^.]+$/, '');
+    if (!f.startsWith('try-') && !ids.has(id)) { rmSync(join(CURRICULUM_RAW, f)); console.log(`[${RAW_NAME}] removed cached file of dropped source: ${f}`); }
+  }
   for (const d of prev?.docs ?? []) if (ids.has(d.source.id) && !rows.some((r) => r.id === d.source.id)) out.docs.push(d);
   for (const source of rows) {
     try {

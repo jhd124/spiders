@@ -184,3 +184,35 @@ test('manifests: major_code formats, report_sources validation', async () => {
   assert.throws(() => readReportManifest(f));
   assert.equal(readReportManifest().length, 0);
 });
+
+test('format detection uses magic bytes only (content-type ignored, e.g. application/octet-stream)', async () => {
+  const { looksLike, fetchFile } = await import('../fetch.js');
+  const pdf = new TextEncoder().encode('%PDF-1.7\n...');
+  const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0, 0]);
+  const html = new TextEncoder().encode('<html>login</html>');
+  assert.ok(looksLike('pdf', pdf));
+  assert.ok(!looksLike('pdf', html));
+  assert.ok(!looksLike('pdf', zip));
+  assert.ok(looksLike('docx', zip));
+  assert.ok(!looksLike('docx', pdf));
+  const f = join(TMP, 'download.jsp'); // no extension, like the SDU download url
+  writeFileSync(f, pdf);
+  const r = await fetchFile('magic-test', 'https://x/download.jsp?id=1', 'pdf', f);
+  assert.equal(r.meta.bytes, pdf.length);
+  writeFileSync(f, html);
+  await assert.rejects(fetchFile('magic-test', 'https://x/download.jsp?id=1', 'pdf', f));
+});
+
+test('ingest: sources removed from the manifest are deleted with their pending rows', async () => {
+  const { ingestCurriculum } = await import('../load.js');
+  const Database = (await import('better-sqlite3')).default;
+  const db = new Database(process.env.CAREER_DB!);
+  const before = (db.prepare('SELECT COUNT(*) n FROM curriculum_source').get() as { n: number }).n;
+  assert.ok(before >= 1);
+  const manifest = join(TMP, 'empty.csv');
+  writeFileSync(manifest, 'school,major_code,grade_year,url,format,verified_by,notes\n');
+  ingestCurriculum(db, { manifest });
+  assert.equal((db.prepare('SELECT COUNT(*) n FROM curriculum_source').get() as { n: number }).n, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) n FROM major_course WHERE review_status='pending' AND curriculum_source_id IS NOT NULL").get() as { n: number }).n, 0);
+  assert.equal((db.prepare('SELECT COUNT(*) n FROM curriculum_source_major').get() as { n: number }).n, 0);
+});

@@ -173,6 +173,9 @@ erDiagram
 
 流程：`seeds/curriculum_sources.csv`（专家填链接）→ `curriculum/crawler.ts`（礼貌抓取：robots.txt、按域名间隔 `SPIDERS_DELAY_MS`、真实 UA；原件存 `data/raw/career/curriculum/<id>.<ext>`，sha256 记入 `source_document`）→ 文本抽取（PDF: unpdf 按页、表格单元格用 ` | ` 分隔；HTML: cheerio；DOCX: mammoth；旧版 .doc 不支持，请要 PDF/DOCX）→ `curriculum/clean.ts`（LLM 抽取）→ `career:ingest`（写 `course` / `major_course`，`extraction_method='llm'`、model、confidence、页码、原文片段、`reviewed=0`、`review_status='pending'`）→ 控制台 **课程审核**（`#/review`）逐条 通过/驳回/修改，记录审核人和时间。
 
+- 格式只按文件头识别（PDF 以 `%PDF-` 开头，DOCX 以 zip 的 `PK` 开头），不看服务器的 Content-Type（很多下载接口返回 `application/octet-stream`）；文件头不符（登录页、反爬页）直接报错。
+- 从清单删掉的行不当历史保留：`crawl` 会删掉它缓存的原件，`career:ingest` 会删掉对应的 `curriculum_source`、分段记录和待审核（pending）的 `major_course`；已审核过的行保留但去掉来源关联，并打警告。
+
 清单列：`school,major_code,grade_year,url,format,verified_by,notes`（format = pdf|html|docx|doc；major_code 为单个代码、`080901|080902` 列表，或 `*`（全校/学院汇编：按「××专业培养方案（代码）」标题切分，抽取其中的试点专业；菁英班/实验班等班级变体只记录在 `curriculum_source_major` 与 `sections_note`，不映射新专业代码；非试点专业只记录）；每个 url 只能出现一行，文件只下载一次（sha256），之后复用，`crawl:career-curriculum -- --refresh` 才重新下载；major_code 必须在 major 表；学校按校名对应 `school`，没有则自动新建 `name:<校名>`）。只收 专业核心课/主干课，不收选修。
 
 环境变量（服务器上写入容器 env；不配置则为 mock 模式）：

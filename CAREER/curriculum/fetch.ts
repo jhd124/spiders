@@ -17,10 +17,16 @@ export interface FetchedFile {
   fetched_at: string;
 }
 
-const MAGIC: Partial<Record<DocFormat, (b: Uint8Array) => boolean>> = {
+/** Format is decided by magic bytes only; servers often send application/octet-stream or wrong types. */
+export const MAGIC: Partial<Record<DocFormat, (b: Uint8Array) => boolean>> = {
   pdf: (b) => Buffer.from(b.slice(0, 5)).toString('latin1') === '%PDF-',
   docx: (b) => b[0] === 0x50 && b[1] === 0x4b, // zip
 };
+
+export function looksLike(format: DocFormat, data: Uint8Array): boolean {
+  const check = MAGIC[format];
+  return check ? check(data) : true;
+}
 
 export async function fetchFile(id: string, url: string, format: DocFormat, localFile?: string): Promise<{ meta: FetchedFile; data: Uint8Array }> {
   mkdirSync(CURRICULUM_RAW, { recursive: true });
@@ -32,8 +38,7 @@ export async function fetchFile(id: string, url: string, format: DocFormat, loca
     data = r.bytes;
     content_type = r.contentType;
   }
-  const check = MAGIC[format];
-  if (check && !check(data)) throw new Error(`${url}: content is not ${format} (content-type ${content_type}); a login page or anti-bot page?`);
+  if (!looksLike(format, data)) throw new Error(`${url}: content is not ${format} (content-type ${content_type}); a login page or anti-bot page?`);
   const path = join(CURRICULUM_RAW, `${id}.${format}`);
   writeFileSync(path, data);
   return {

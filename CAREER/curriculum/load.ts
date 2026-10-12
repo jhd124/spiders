@@ -67,6 +67,17 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
     synced++;
   }
 
+  // prune sources no longer in the manifest (a removed row is deleted, not kept as history)
+  const keep = new Set(manifest.map((m) => m.id));
+  const stale = (db.prepare('SELECT id, url FROM curriculum_source').all() as { id: string; url: string }[]).filter((r) => !keep.has(r.id));
+  for (const st of stale) {
+    const mc = db.prepare("DELETE FROM major_course WHERE curriculum_source_id = ? AND review_status = 'pending'").run(st.id).changes;
+    const kept = db.prepare('UPDATE major_course SET curriculum_source_id = NULL WHERE curriculum_source_id = ?').run(st.id).changes;
+    db.prepare('DELETE FROM curriculum_source_major WHERE source_id = ?').run(st.id);
+    db.prepare('DELETE FROM curriculum_source WHERE id = ?').run(st.id);
+    console.warn(`[career] curriculum: removed source not in manifest ${st.url} (${mc} pending major_course rows deleted${kept ? `, ${kept} reviewed rows kept without source link` : ''})`);
+  }
+
   const upCourse = db.prepare(`INSERT INTO course (id, school_id, name, credits, hours, course_type, source_url, fetched_at, extraction_method, confidence, reviewed, model, source_doc_id)
     VALUES (@id, @school_id, @name, @credits, @hours, @course_type, @source_url, @fetched_at, 'llm', @confidence, 0, @model, @source_doc_id)
     ON CONFLICT (id) DO UPDATE SET credits=COALESCE(excluded.credits, course.credits), hours=COALESCE(excluded.hours, course.hours), source_url=excluded.source_url, fetched_at=excluded.fetched_at,
