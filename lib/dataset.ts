@@ -52,6 +52,11 @@ export interface FtsConfig {
 }
 
 export interface DatasetConfig {
+  /**
+   * sub-key when a group's dataset.ts default-exports several datasets (an array);
+   * the dataset id becomes `<GROUP>.<key>`. Not needed for a single dataset.
+   */
+  key?: string;
   /** display name */
   title: string;
   description?: string;
@@ -76,3 +81,6 @@ export interface DatasetConfig {
 }
 
 export const defineDataset = (c: DatasetConfig) => c;
+
+/** A group's dataset.ts may default-export one DatasetConfig or an array of them (each with a `key`). */
+export type DatasetModule = DatasetConfig | DatasetConfig[];

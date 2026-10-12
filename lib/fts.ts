@@ -34,11 +34,15 @@ export function rebuildFts(db: Database.Database, cfg: DatasetConfig): number {
   const cols = cfg.fts.columns.map(ident);
   const id = ident(cfg.idColumn);
   db.exec(`DROP TABLE IF EXISTS ${t}`);
-  db.exec(`CREATE VIRTUAL TABLE ${t} USING fts5(${id} UNINDEXED, ${cols.join(', ')}, tokenize = 'unicode61 remove_diacritics 2')`);
+  // the id column is stored UNINDEXED unless it is also listed as a searchable column (e.g. a code)
+  const idIndexed = cols.includes(id);
+  const defs = idIndexed ? cols : [`${id} UNINDEXED`, ...cols];
+  const srcCols = idIndexed ? cols : [id, ...cols];
+  db.exec(`CREATE VIRTUAL TABLE ${t} USING fts5(${defs.join(', ')}, tokenize = 'unicode61 remove_diacritics 2')`);
   db.exec(`CREATE TABLE IF NOT EXISTS _fts_meta (fts_table TEXT PRIMARY KEY, signature TEXT NOT NULL, built_at TEXT NOT NULL)`);
   const n = db.transaction(() => {
     const info = db
-      .prepare(`INSERT INTO ${t} (${id}, ${cols.join(', ')}) SELECT ${id}, ${cols.map((c) => `COALESCE(${c}, '')`).join(', ')} FROM ${ident(cfg.table)}`)
+      .prepare(`INSERT INTO ${t} (${srcCols.join(', ')}) SELECT ${srcCols.map((c) => (c === id ? c : `COALESCE(${c}, '')`)).join(', ')} FROM ${ident(cfg.table)}`)
       .run();
     db.prepare(`INSERT OR REPLACE INTO _fts_meta VALUES (?, ?, ?)`).run(t, signature(db, cfg), new Date().toISOString());
     return info.changes;
@@ -148,8 +152,24 @@ export function parseKeywordQuery(q: string): { match: string; acronyms: string[
 
 /** WHERE fragment for a keyword query on dataset `cfg` (source table must be aliased as `t`). */
 export function keywordCondition(cfg: DatasetConfig, q: string): SqlFragment | null {
+  // Chinese has no word separators (unicode61 would treat a whole CJK run as one token), so CJK
+  // terms are matched as substrings (LIKE) on the indexed columns and ANDed with the rest.
+  const cjk: string[] = [];
+  if (!/(^|\s)(OR|\|)(\s|$)/.test(q)) {
+    q = q.replace(/"([^"]*\p{Script=Han}[^"]*)"|(\S*\p{Script=Han}\S*)/gu, (_m, a: string | undefined, b: string | undefined) => {
+      cjk.push((a ?? b ?? '').trim());
+      return ' ';
+    });
+  }
+  const like = cjk.filter(Boolean).map((term) => ({
+    sql: `(${cfg.fts.columns.map((c) => `t.${ident(c)} LIKE ? ESCAPE '\\'`).join(' OR ')})`,
+    params: cfg.fts.columns.map(() => `%${term.replace(/[\\%_]/g, (ch) => '\\' + ch)}%`),
+  }));
   const parsed = parseKeywordQuery(q);
-  if (!parsed) return null;
+  if (!parsed) {
+    if (!like.length) return null;
+    return { sql: like.map((l) => l.sql).join(' AND '), params: like.flatMap((l) => l.params) };
+  }
   const id = ident(cfg.idColumn);
   const fts = ident(cfg.fts.table);
   const parts = [`t.${id} IN (SELECT ${id} FROM ${fts} WHERE ${fts} MATCH ?)`];
@@ -160,6 +180,10 @@ export function keywordCondition(cfg: DatasetConfig, q: string): SqlFragment | n
       parts.push(`(${cfg.fts.columns.map((c) => `re_cs(?, t.${ident(c)})`).join(' OR ')})`);
       params.push(...cfg.fts.columns.map(() => wordPattern(a)));
     }
+  }
+  for (const l of like) {
+    parts.push(l.sql);
+    params.push(...l.params);
   }
   return { sql: parts.join(' AND '), params };
 }

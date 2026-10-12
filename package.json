@@ -2,7 +2,7 @@
   "name": "spiders",
   "version": "0.1.0",
   "private": true,
-  "description": "Crawlers for Ivy League open / MOOC course listings",
+  "description": "Crawlers for open course listings (MOOC) and 志愿填报/职业规划 master data (CAREER)",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -32,6 +32,13 @@
     "clean:all": "npm run clean:harvard && npm run clean:yale && npm run clean:princeton && npm run clean:columbia && npm run clean:upenn && npm run clean:brown && npm run clean:dartmouth && npm run clean:cornell && npm run clean:stanford && npm run clean:mit",
     "ingest": "tsx MOOC/ingest.ts",
     "all": "tsx scripts/run-group.ts MOOC",
+    "career:migrate": "tsx CAREER/migrate.ts",
+    "crawl:career-majors": "tsx CAREER/moe_majors/crawler.ts",
+    "clean:career-majors": "tsx CAREER/moe_majors/clean.ts",
+    "crawl:career-occupations": "tsx CAREER/occupations/crawler.ts",
+    "clean:career-occupations": "tsx CAREER/occupations/clean.ts",
+    "career:ingest": "tsx CAREER/ingest.ts",
+    "career:all": "tsx scripts/run-group.ts CAREER",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",
     "web:server": "tsx web/server/index.ts",
     "web:dev": "concurrently -k -n api,ui -c blue,magenta \"tsx watch --clear-screen=false web/server/index.ts\" \"vite --config web/vite.config.ts\"",
@@ -55,6 +62,7 @@
     "cheerio": "^1.2.0",
     "hono": "^4.13.13",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "unpdf": "^1.8.1"
   }
 }

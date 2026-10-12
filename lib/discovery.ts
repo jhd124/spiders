@@ -3,7 +3,8 @@
  *   <GROUP>/<name>/crawler.ts   -> a crawler (required)
  *   <GROUP>/<name>/clean.ts     -> its cleaning step (optional)
  *   <GROUP>/ingest.ts           -> group ingest, accepts crawler names as args (optional)
- *   <GROUP>/dataset.ts          -> query config for the web UI (optional, default export DatasetConfig)
+ *   <GROUP>/dataset.ts          -> query config for the web UI (optional, default export DatasetConfig or DatasetConfig[])
+ *   <GROUP>/migrate.ts          -> schema migrations (optional, exports migrate()); run on web server start
  */
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,6 +22,7 @@ export interface GroupInfo {
   crawlers: CrawlerInfo[];
   ingestFile: string | null;
   datasetFile: string | null;
+  migrateFile: string | null;
 }
 
 const SKIP = new Set(['node_modules', 'lib', 'scripts', 'web', 'data', 'dist']);
@@ -54,6 +56,7 @@ export function discoverGroups(root = ROOT): GroupInfo[] {
       crawlers,
       ingestFile: existsSync(join(root, g, 'ingest.ts')) ? `${g}/ingest.ts` : null,
       datasetFile: existsSync(join(root, g, 'dataset.ts')) ? `${g}/dataset.ts` : null,
+      migrateFile: existsSync(join(root, g, 'migrate.ts')) ? `${g}/migrate.ts` : null,
     });
   }
   return groups;

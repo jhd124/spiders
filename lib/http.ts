@@ -117,6 +117,19 @@ export interface PoliteFetchOptions {
 
 /** Fetch a URL politely and return the body text. Throws on non-2xx after retries. */
 export async function politeFetch(url: string, opts: PoliteFetchOptions = {}): Promise<string> {
+  return (await politeResponse(url, opts)).text();
+}
+
+/** Same as politeFetch but returns the raw bytes (PDFs etc.) and the final content-type. */
+export async function politeFetchBytes(
+  url: string,
+  opts: PoliteFetchOptions = {},
+): Promise<{ bytes: Uint8Array; contentType: string | null }> {
+  const res = await politeResponse(url, { ...opts, headers: { Accept: '*/*', ...opts.headers } });
+  return { bytes: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') };
+}
+
+async function politeResponse(url: string, opts: PoliteFetchOptions): Promise<Response> {
   const u = new URL(url);
   const robots = await getRobots(u.origin);
   if (!isAllowed(robots, u.pathname + u.search)) {
@@ -142,7 +155,7 @@ export async function politeFetch(url: string, opts: PoliteFetchOptions = {}): P
       await sleep(2 ** attempt * 2000);
       continue;
     }
-    if (res.ok) return res.text();
+    if (res.ok) return res;
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const ra = Number(res.headers.get('retry-after'));
       await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 2 ** attempt * 3000);

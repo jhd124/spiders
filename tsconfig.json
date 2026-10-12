@@ -16,6 +16,7 @@
   "include": [
     "lib/**/*.ts",
     "MOOC/**/*.ts",
+    "CAREER/**/*.ts",
     "scripts/**/*.ts",
     "web/server/**/*.ts",
     "web/shared/**/*.ts",

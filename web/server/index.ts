@@ -10,7 +10,9 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { pathToFileURL } from 'node:url';
 import { ROOT } from '../../lib/io.js';
+import { discoverGroups } from '../../lib/discovery.js';
 import { HttpError, RunManager } from './runs.js';
 import { describeDataset, getItem, listDatasets, queryDataset } from './query.js';
 import type { CrawlerView, GroupView, LogLine, Run, Task } from '../shared/types.js';
@@ -173,6 +175,18 @@ if (existsSync(DIST)) {
   app.get('*', serveStatic({ path: join(DIST, 'index.html') }));
 } else {
   app.get('/', (c) => c.text('API is running. Frontend not built: use `npm run web:dev` (http://127.0.0.1:5173) or `npm run web:build`.'));
+}
+
+/* ---------- group migrations (idempotent; failures are logged, never block startup) ---------- */
+
+for (const g of discoverGroups()) {
+  if (!g.migrateFile) continue;
+  try {
+    const mod = (await import(pathToFileURL(join(ROOT, g.migrateFile)).href)) as { migrate?: () => unknown };
+    mod.migrate?.();
+  } catch (err) {
+    console.error(`[migrate] ${g.name} failed:`, err);
+  }
 }
 
 serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {

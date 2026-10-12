@@ -2,6 +2,9 @@
 
 藤校（常春藤盟校）及 Stanford、MIT 的公开课 / MOOC 信息爬虫，TypeScript + Node 20。
 
+另有 **CAREER** 分组（志愿填报 / 职业规划主数据：教育部本科专业目录、职业分类大典 2022），见 [CAREER/README.md](CAREER/README.md)。
+服务器上加载 CAREER 数据：`docker exec spiders npm run career:all`（迁移在 Web 服务启动时自动执行）。
+
 ## 目录结构
 
 ```
@@ -89,7 +92,10 @@ npm run web:start    # 生产：单进程 http://127.0.0.1:8787（API + 静态�
 | `<分组>/<名字>/crawler.ts` | ✓ | 爬虫，接受 `--flag` 参数 |
 | `<分组>/<名字>/clean.ts` | | 清洗 |
 | `<分组>/ingest.ts` | | 入库，参数为爬虫名（不传 = 全部） |
-| `<分组>/dataset.ts` | | `export default defineDataset({...})`（见 `lib/dataset.ts`），配置数据库路径、表、全文索引列（`fts`）、主题预设（`topics`）、筛选项、列表列，查询页自动出现 |
+| `<分组>/dataset.ts` | | `export default defineDataset({...})`（见 `lib/dataset.ts`），配置数据库路径、表、全文索引列（`fts`）、主题预设（`topics`）、筛选项、列表列，查询页自动出现；也可以导出数组（每项带 `key`，数据集 id 为 `<分组>.<key>`） |
+| `<分组>/migrate.ts` | | 导出 `migrate()`，Web 服务启动时自动调用（须幂等） |
+
+关键词搜索：英文按整词（FTS5），含中文的词按子串匹配（中文没有词边界）。
 
 日志里的条数按约定解析：`[x] 来源: N records`（抓取）、`clean: N`（清洗）、`upserted N`（入库）。
 

@@ -9,19 +9,33 @@ import { pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import { ROOT } from '../../lib/io.js';
 import { discoverGroups } from '../../lib/discovery.js';
-import type { DatasetConfig } from '../../lib/dataset.js';
+import type { DatasetConfig, DatasetModule } from '../../lib/dataset.js';
 import { ensureFts, keywordCondition, registerFunctions, topicCondition } from '../../lib/fts.js';
 import type { DatasetView, QueryResult } from '../shared/types.js';
 import { HttpError } from './runs.js';
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-async function loadConfig(group: string): Promise<DatasetConfig> {
+/** All datasets of a group as [id, config]; id is `<GROUP>` or `<GROUP>.<key>` when dataset.ts exports an array. */
+async function loadGroupConfigs(group: string): Promise<[string, DatasetConfig][]> {
   const g = discoverGroups().find((x) => x.name === group);
   if (!g?.datasetFile) throw new HttpError(404, `group ${group} has no dataset.ts`);
-  const mod = (await import(pathToFileURL(join(ROOT, g.datasetFile)).href)) as { default?: DatasetConfig };
-  if (!mod.default || mod.default.kind !== 'sqlite') throw new HttpError(500, `${g.datasetFile} must default-export a sqlite DatasetConfig`);
-  return mod.default;
+  const mod = (await import(pathToFileURL(join(ROOT, g.datasetFile)).href)) as { default?: DatasetModule };
+  const list = Array.isArray(mod.default) ? mod.default : mod.default ? [mod.default] : [];
+  if (!list.length || list.some((c) => c.kind !== 'sqlite'))
+    throw new HttpError(500, `${g.datasetFile} must default-export a sqlite DatasetConfig (or an array of them)`);
+  if (!Array.isArray(mod.default)) return [[group, list[0]!]];
+  return list.map((c) => {
+    if (!c.key || !IDENT.test(c.key)) throw new HttpError(500, `${g.datasetFile}: every dataset in the array needs a key`);
+    return [`${group}.${c.key}`, c];
+  });
+}
+
+async function loadConfig(id: string): Promise<DatasetConfig> {
+  const group = id.split('.')[0] ?? id;
+  const found = (await loadGroupConfigs(group)).find(([k]) => k === id);
+  if (!found) throw new HttpError(404, `no dataset ${id}`);
+  return found[1];
 }
 
 /** Open the dataset DB read-only and return its column list; null if the DB/table doesn't exist yet. */
@@ -49,7 +63,7 @@ export async function listDatasets(): Promise<DatasetView[]> {
   for (const g of discoverGroups()) {
     if (!g.datasetFile) continue;
     try {
-      out.push(await describeDataset(g.name));
+      for (const [id] of await loadGroupConfigs(g.name)) out.push(await describeDataset(id));
     } catch (err) {
       out.push({
         group: g.name,
