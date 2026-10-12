@@ -24,7 +24,8 @@ docker build -q -t "spiders:$SHA" "$NEW"
 PREV_IMG="$(docker inspect -f '{{.Config.Image}}' spiders 2>/dev/null || true)"
 run(){ docker run -d --name spiders --restart unless-stopped --init -p 127.0.0.1:8787:8787 \
   --memory 768m --memory-swap 768m --cpus 1.5 --log-opt max-size=10m --log-opt max-file=3 \
-  -e HOST=0.0.0.0 -e PORT=8787 -e SPIDERS_DATA_DIR=/app/data -v "$BASE/data:/app/data" "$1" >/dev/null; }
+  -e HOST=0.0.0.0 -e PORT=8787 -e SPIDERS_DATA_DIR=/app/data -v "$BASE/data:/app/data" \
+  $( [ -f "$BASE/spiders.env" ] && echo --env-file "$BASE/spiders.env" ) "$1" >/dev/null; }
 healthy(){ for i in $(seq 1 30); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/ || true)" = 200 ] && return 0; sleep 2; done; return 1; }
 
