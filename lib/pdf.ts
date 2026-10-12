@@ -27,15 +27,20 @@ export async function pdfItems(data: Uint8Array): Promise<{ pages: number; items
 
 /** Group items into lines (same page, |dy| < tol), sorted top-to-bottom, text joined left-to-right. */
 export function toLines(items: PdfItem[], tol = 3): { page: number; y: number; text: string }[] {
-  const lines: { page: number; y: number; parts: PdfItem[] }[] = [];
-  for (const it of items) {
-    let l = lines.find((x) => x.page === it.page && Math.abs(x.y - it.y) < tol);
-    if (!l) lines.push((l = { page: it.page, y: it.y, parts: [] }));
-    l.parts.push(it);
+  const out: { page: number; y: number; text: string }[] = [];
+  const byPage = new Map<number, PdfItem[]>();
+  for (const it of items) (byPage.get(it.page) ?? byPage.set(it.page, []).get(it.page)!).push(it);
+  for (const page of [...byPage.keys()].sort((a, b) => a - b)) {
+    const lines: { y: number; parts: PdfItem[] }[] = [];
+    for (const it of byPage.get(page)!) {
+      let l = lines.find((x) => Math.abs(x.y - it.y) < tol);
+      if (!l) lines.push((l = { y: it.y, parts: [] }));
+      l.parts.push(it);
+    }
+    for (const l of lines.sort((a, b) => b.y - a.y))
+      out.push({ page, y: l.y, text: l.parts.sort((a, b) => a.x - b.x).map((p) => p.str).join('') });
   }
-  return lines
-    .sort((a, b) => a.page - b.page || b.y - a.y)
-    .map((l) => ({ page: l.page, y: l.y, text: l.parts.sort((a, b) => a.x - b.x).map((p) => p.str).join('') }));
+  return out;
 }
 
 export async function pdfLines(data: Uint8Array) {

@@ -25,7 +25,11 @@ export interface Occupation {
 }
 
 /** Official totals of the 2022 公示稿 announcement (MOHRSS, 2022-07-12). */
-export const OFFICIAL_COUNTS_2022_DRAFT = { 1: 8, 2: 79, 3: 449, 4: 1636, green: 133, digital: 97, both: 23 };
+/** Official totals (S/L totals include the 23 L/S). 公示稿 2022-07-12; final edition per 人社部 2022-09-28 release. */
+export const OFFICIAL_COUNTS = {
+  draft: { 1: 8, 2: 79, 3: 449, 4: 1636, digital_total_S: 97, green_total_L: 133, both_LS: 23 },
+  final: { 1: 8, 2: 79, 4: 1639, digital_total_S: 97, green_total_L: 134, both_LS: 23 },
+};
 
 const CODE = /(\d)-(\d{2})(?:-(\d{2}))?(?:-(\d{2}))?/;
 const JUNK = /^(续表|中华人民共和国|职业分类大典（2022年版）|中类|小类|细类\(职业\)|细类（职业）|分类体系表|\d{1,3})$/;
@@ -164,11 +168,13 @@ export async function clean() {
   const l4 = occ.filter((o) => o.level === 4);
   const counts = {
     1: n(1), 2: n(2), 3: n(3), 4: n(4),
-    green: l4.filter((o) => o.is_green && !o.is_digital).length,
-    digital: l4.filter((o) => o.is_digital && !o.is_green).length,
-    both: l4.filter((o) => o.is_digital && o.is_green).length,
+    digital_total_S: l4.filter((o) => o.is_digital).length,
+    green_total_L: l4.filter((o) => o.is_green).length,
+    both_LS: l4.filter((o) => o.is_digital && o.is_green).length,
+    digital_only: l4.filter((o) => o.is_digital && !o.is_green).length,
+    green_only: l4.filter((o) => o.is_green && !o.is_digital).length,
   };
-  console.log(`[${RAW_NAME}] parsed`, JSON.stringify(counts), 'official 公示稿', JSON.stringify(OFFICIAL_COUNTS_2022_DRAFT));
+  console.log(`[${RAW_NAME}] parsed`, JSON.stringify(counts), 'official', JSON.stringify(OFFICIAL_COUNTS));
   const doc = { doc: raw.doc, fetched_url: raw.fetched_url, fetched_at: raw.fetched_at, sha256: raw.sha256, bytes: raw.bytes };
   await writeJson(cleanPath(RAW_NAME), { doc, counts, occupations: occ });
   console.log(`[${RAW_NAME}] clean: ${occ.length} records -> ${cleanPath(RAW_NAME)}`);

@@ -142,10 +142,41 @@ function ingestOccupations(db: Database.Database) {
       edition: c.doc.doc.edition, source_batch: '大典2022', status: '有效',
       source_url: c.doc.doc.url, source_doc_id: c.doc.doc.id, source_page: o.page, fetched_at: c.doc.fetched_at,
       extraction_method: 'pdf_parse', confidence: c.doc.doc.is_official ? 1 : 0.9, reviewed: 0, updated_at: now,
+      name_source: c.doc.doc.is_official ? 'official' : 'mirror:cccac',
+      digital_flag_source: o.is_digital ? 'mirror:cccac' : null,
+      green_flag_source: o.is_green ? 'mirror:cccac' : null,
     }));
   const n = upsert(db, 'occupation', ['code'], rows);
   const by = (l: number) => rows.filter((r) => r.level === l).length;
   console.log(`[career] occupations: upserted ${n} (大类 ${by(1)}, 中类 ${by(2)}, 小类 ${by(3)}, 细类 ${by(4)})`);
+  fillFlagsFromDraft(db);
+}
+
+const DRAFT_URL = 'https://file.m12333.cn/upfile/download/063d5abb-fada-f27f-a1e8-3de63b44d5df.pdf';
+
+/** Expert decision 2026-10-12: the 公示稿 S/L markings are authoritative for filling missing flags. */
+function fillFlagsFromDraft(db: Database.Database) {
+  const draft = csv('occupation_draft_2022.csv') as { code: string; name: string; flag: string }[];
+  upsert(db, 'occupation_draft_2022', ['code'], draft.map((d) => ({ code: d.code, name: d.name, flag: d.flag, source_url: DRAFT_URL, extraction_method: 'pdf_parse', reviewed: 0 })));
+  const counts = () => db.prepare(`SELECT SUM(is_digital) s, SUM(is_green) l, SUM(is_digital * is_green) ls FROM occupation WHERE level = 4`).get() as { s: number; l: number; ls: number };
+  const before = counts();
+  const byName = new Map(draft.map((d) => [d.name, d]));
+  const byCode = new Map(draft.map((d) => [d.code, d]));
+  const l4 = db.prepare(`SELECT code, name, is_digital, is_green FROM occupation WHERE level = 4`).all() as { code: string; name: string; is_digital: number; is_green: number }[];
+  const set = db.prepare(`UPDATE occupation SET is_digital = ?, is_green = ?, digital_flag_source = ?, green_flag_source = ? WHERE code = ?`);
+  let filled = 0, matched = 0;
+  for (const o of l4) {
+    const sc = byCode.get(o.code);
+    const d = byName.get(o.name) ?? (sc && sc.name.length >= 6 && o.name.startsWith(sc.name) ? sc : undefined);
+    if (!d) continue;
+    matched++;
+    const dS = d.flag.includes('S'), dL = d.flag.includes('L');
+    const src = (mirror: number, draftHas: boolean) => (mirror && draftHas ? 'mirror:cccac+公示稿' : mirror ? 'mirror:cccac' : draftHas ? '公示稿' : null);
+    if ((dS && !o.is_digital) || (dL && !o.is_green)) filled++;
+    set.run(o.is_digital || dS ? 1 : 0, o.is_green || dL ? 1 : 0, src(o.is_digital, dS), src(o.is_green, dL), o.code);
+  }
+  const after = counts();
+  console.log(`[career] S/L flags (细类): before S=${before.s} L=${before.l} L/S=${before.ls}; 公示稿 matched ${matched}/${l4.length}, filled ${filled}; after S=${after.s} L=${after.l} L/S=${after.ls}`);
 }
 
 function ingestSchools(db: Database.Database) {

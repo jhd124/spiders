@@ -62,6 +62,7 @@ export function parseCatalog(raw: RawCatalog): ParsedCatalog {
     const degreePart = m.degree_note?.match(/(?:可授|授予)(.+?)学士学位/)?.[1];
     m.degree_categories = degreePart ? [...new Set(degreePart.match(DEGREE) ?? [])] : [m.category_name];
     if (!m.degree_categories.length) throw new Error(`no degree category for ${m.code}: ${m.degree_note}`);
+    m.is_engineering = m.degree_categories.includes('工学'); // engineering = may award 工学 (expert decision 2026-10-12)
     majors.push(m);
     open = null;
   };
@@ -99,7 +100,7 @@ export function parseCatalog(raw: RawCatalog): ParsedCatalog {
           class_name: parent?.name ?? null,
           is_special: suffix.includes('T'),
           is_controlled: suffix.includes('K'),
-          is_engineering: cat!.code === '08',
+          is_engineering: false, // set in closeMajor from 学位授予门类
           degree_categories: [],
           degree_note: null,
           former_code: null,

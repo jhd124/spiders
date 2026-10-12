@@ -15,7 +15,7 @@ const majors = defineDataset({
   filters: [
     { key: 'category', label: '学科门类', column: 'category_name', type: 'select' },
     { key: 'class', label: '专业类', column: 'class_name', type: 'select' },
-    { key: 'eng', label: '工学(08)', column: 'is_engineering', type: 'boolean' },
+    { key: 'eng', label: '工科(可授工学)', column: 'is_engineering', type: 'boolean' },
     { key: 'special', label: '特设 T', column: 'is_special', type: 'boolean' },
     { key: 'controlled', label: '国控 K', column: 'is_controlled', type: 'boolean' },
     { key: 'status', label: '状态', column: 'status', type: 'select' },
@@ -84,6 +84,7 @@ const occupations = defineDataset({
     { column: 'parent_code', label: '上级' },
     { column: 'is_digital', label: 'S', format: 'boolean' },
     { column: 'is_green', label: 'L', format: 'boolean' },
+    { column: 'name_source', label: '名称来源' },
     { column: 'source_url', label: '来源', format: 'link' },
   ],
   defaultSort: 'code',
