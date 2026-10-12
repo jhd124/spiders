@@ -173,7 +173,7 @@ erDiagram
 
 流程：`seeds/curriculum_sources.csv`（专家填链接）→ `curriculum/crawler.ts`（礼貌抓取：robots.txt、按域名间隔 `SPIDERS_DELAY_MS`、真实 UA；原件存 `data/raw/career/curriculum/<id>.<ext>`，sha256 记入 `source_document`）→ 文本抽取（PDF: unpdf 按页、表格单元格用 ` | ` 分隔；HTML: cheerio；DOCX: mammoth；旧版 .doc 不支持，请要 PDF/DOCX）→ `curriculum/clean.ts`（LLM 抽取）→ `career:ingest`（写 `course` / `major_course`，`extraction_method='llm'`、model、confidence、页码、原文片段、`reviewed=0`、`review_status='pending'`）→ 控制台 **课程审核**（`#/review`）逐条 通过/驳回/修改，记录审核人和时间。
 
-清单列：`school,major_code,grade_year,url,format,verified_by,notes`（format = pdf|html|docx|doc；major_code 必须在 major 表；学校按校名对应 `school`，没有则自动新建 `name:<校名>`）。只收 专业核心课/主干课，不收选修。
+清单列：`school,major_code,grade_year,url,format,verified_by,notes`（format = pdf|html|docx|doc；major_code 为单个代码、`080901|080902` 列表，或 `*`（全校/学院汇编：按「××专业培养方案（代码）」标题切分，抽取其中的试点专业；菁英班/实验班等班级变体只记录在 `curriculum_source_major` 与 `sections_note`，不映射新专业代码；非试点专业只记录）；每个 url 只能出现一行，文件只下载一次（sha256），之后复用，`crawl:career-curriculum -- --refresh` 才重新下载；major_code 必须在 major 表；学校按校名对应 `school`，没有则自动新建 `name:<校名>`）。只收 专业核心课/主干课，不收选修。
 
 环境变量（服务器上写入容器 env；不配置则为 mock 模式）：
 
@@ -201,6 +201,8 @@ npm run test:career                                                             
 防编造：mock（未配置 LLM）结果带 `mock:true`，ingest 跳过，绝不入库；模型返回的每门课都必须给出原文片段，片段须在该块原文中逐字出现（忽略空白和 ` | `）且包含课程名，否则丢弃；JSON 按 schema 严格校验；同名课程合并，保留置信度高者。已审核（approved/rejected/edited）的行重跑不会被覆盖；文档 sha256 变了而未重新抽取时不入库。
 
 成本控制：只把含 核心课/主干课/课程设置/学位课/教学计划 等关键词的块发给模型；按 sha256(model+提示词版本+块) 缓存在 `llm_cache`，重跑不重复付费（改模型或 `PROMPT_VERSION` 才会重新调用）；temperature 0；`LLM_MAX_CALLS` 硬上限；日志打印每份文档的块数、调用数、token 数。实测山大 080901（16 页）≈ 3 块、约 9k 输入 token/份；25 专业 × 4 校 ≈ 100 份 ≈ 100 万输入 token。
+
+就业/教学质量报告（006，仅表结构）：`employment_report.report_type` = 就业质量报告 | 本科教学质量报告，新增 graduation_rate（本科毕业率）、placement_rate（去向落实率）、degree_rate、report_source_id（升学率 further_study_rate、出国率 abroad_rate 已有）；链接清单 `seeds/report_sources.csv`（school,report_type,year,url,format,verified_by,notes），ingest 时同步到 `report_source`，暂不抽取。
 
 第二阶段（课程 → 技能）：`curriculum/skills.ts` 的 `SkillTagger` 接口，目前为 `NoopSkillTagger`（二级技能未定义）。
 

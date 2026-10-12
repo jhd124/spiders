@@ -151,3 +151,36 @@ test('ingest: mock results are never stored; real results are, and reviews survi
   assert.deepEqual(after, { credits: 5, review_status: 'edited' });
   db.close();
 });
+
+test('multi-major 汇编: sections split by heading; class variants recorded, not extracted; non-pilot skipped', async () => {
+  const { planUnits } = await import('../plan.js');
+  const pages = [
+    { page: 1, text: '计算机科学与技术学院' },
+    { page: 2, text: '山东大学本科专业培养方案\n计算机科学与技术专业培养方案（080901）\n四、核心课程：\n离散数学、操作系统\n·129·' },
+    { page: 3, text: '学院\n计算机科学与技术专业（菁英班）培养方案（080901）\n四、核心课程：\n高级算法\n·130·' },
+    { page: 4, text: '学院\n电子商务专业培养方案（120801）\n四、核心课程：\n电子商务概论' },
+  ];
+  const p = planUnits({ major_code: '*' }, pages);
+  assert.equal(p.sections.length, 3);
+  assert.deepEqual(p.units.map((u) => [u.major_code, u.section?.page_start, u.section?.page_end]), [['080901', 2, 2]]);
+  assert.equal(p.sections[1]!.variant, '菁英班');
+  assert.equal(p.sections[2]!.pilot, false);
+  const r = await extractCourses(p.units[0]!.pages, ctx, mockProvider(), new MemoryCache());
+  assert.deepEqual(r.courses.map((c) => c.name), ['离散数学', '操作系统']);
+  assert.deepEqual(planUnits({ major_code: '080902|080901' }, pages).missing, ['080902']);
+});
+
+test('manifests: major_code formats, report_sources validation', async () => {
+  const { readManifest } = await import('../manifest.js');
+  const { readReportManifest } = await import('../../report_sources.js');
+  const f = join(TMP, 'm2.csv');
+  writeFileSync(f, 'school,major_code,grade_year,url,format,verified_by,notes\nA,*,2024,https://a/x.pdf,pdf,,\nB,080901|080902,,https://b/x.pdf,pdf,,\n');
+  assert.equal(readManifest(f).length, 2);
+  writeFileSync(f, 'school,major_code,grade_year,url,format,verified_by,notes\nA,cs,2024,https://a/x.pdf,pdf,,\n');
+  assert.throws(() => readManifest(f));
+  writeFileSync(f, 'school,report_type,year,url,format,verified_by,notes\n山东大学,本科教学质量报告,2023-2024学年,https://a/r.pdf,pdf,,\n');
+  assert.equal(readReportManifest(f)[0]!.report_type, '本科教学质量报告');
+  writeFileSync(f, 'school,report_type,year,url,format,verified_by,notes\n山东大学,年报,2024,https://a/r.pdf,pdf,,\n');
+  assert.throws(() => readReportManifest(f));
+  assert.equal(readReportManifest().length, 0);
+});

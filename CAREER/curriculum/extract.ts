@@ -152,7 +152,7 @@ export const mockProvider = () =>
       if (!m) continue;
       // list may continue on the following lines until a sentence end / next heading
       let list = m[3] ?? '';
-      for (let j = i + 1; j < lines.length && !/[。]$/.test(list) && j <= i + 3 && !/^[一二三四五六七八九十]+、|^\[\[/.test(lines[j]!); j++) list += lines[j]!;
+      for (let j = i + 1; j < lines.length && !/[。]$/.test(list) && j <= i + 3 && !/^[一二三四五六七八九十]+、|^\[\[|^\s*·\s*\d+\s*·/.test(lines[j]!); j++) list += lines[j]!;
       const names = list.replace(/[。.]\s*$/, '').split(/[、，,；;]/).map((s) => s.trim()).filter((s) => s.length >= 2 && s.length <= 20);
       for (const n of names) {
         const at = line.includes(n) ? line : list;

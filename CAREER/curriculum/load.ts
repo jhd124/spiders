@@ -10,7 +10,7 @@ import { existsSync } from 'node:fs';
 import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { cleanPath, rawPath } from '../../lib/io.js';
-import { readManifest } from './manifest.js';
+import { isMultiMajor, majorCodes, readManifest } from './manifest.js';
 import { RAW_NAME, type RawCurriculum } from './crawler.js';
 import type { CleanCurriculum } from './clean.js';
 import { normCourseName } from './extract.js';
@@ -31,9 +31,9 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
     db.prepare('INSERT INTO school (id, name, source) VALUES (?, ?, ?)').run(`name:${name}`, name, 'curriculum_sources.csv');
     return `name:${name}`;
   };
-  const upSource = db.prepare(`INSERT INTO curriculum_source (id, school_name, school_id, major_code, grade_year, url, format, verified_by, notes, source_doc_id, status, error, updated_at)
-    VALUES (@id, @school_name, @school_id, @major_code, @grade_year, @url, @format, @verified_by, @notes, @source_doc_id, @status, @error, @updated_at)
-    ON CONFLICT (id) DO UPDATE SET school_name=excluded.school_name, school_id=excluded.school_id, major_code=excluded.major_code, grade_year=excluded.grade_year,
+  const upSource = db.prepare(`INSERT INTO curriculum_source (id, school_name, school_id, major_code, major_codes, grade_year, url, format, verified_by, notes, source_doc_id, status, error, sections_note, updated_at)
+    VALUES (@id, @school_name, @school_id, @major_code, @major_codes, @grade_year, @url, @format, @verified_by, @notes, @source_doc_id, @status, @error, @sections_note, @updated_at)
+    ON CONFLICT (id) DO UPDATE SET school_name=excluded.school_name, school_id=excluded.school_id, major_code=excluded.major_code, major_codes=excluded.major_codes, grade_year=excluded.grade_year, sections_note=COALESCE(excluded.sections_note, curriculum_source.sections_note),
       format=excluded.format, verified_by=excluded.verified_by, notes=excluded.notes, source_doc_id=COALESCE(excluded.source_doc_id, curriculum_source.source_doc_id),
       status=CASE WHEN curriculum_source.status='extracted' AND excluded.status='fetched' THEN 'extracted' ELSE excluded.status END, error=excluded.error, updated_at=excluded.updated_at`);
   const upDoc = db.prepare(`INSERT INTO source_document (id, title, publisher, edition, url, fetched_url, is_official, sha256, bytes, fetched_at, note)
@@ -44,16 +44,25 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
   let synced = 0;
   const srcMeta = new Map<string, { schoolId: string; docId: string | null; fetchedAt: string | null; year: number | null }>();
   for (const m of manifest) {
-    if (!majors.has(m.major_code)) { console.warn(`[career] curriculum: ${m.school} ${m.major_code} not in major table, skipped`); continue; }
+    const unknown = (majorCodes(m) ?? []).filter((c) => !majors.has(c));
+    if (unknown.length) { console.warn(`[career] curriculum: ${m.school} ${unknown.join(',')} not in major table, skipped`); continue; }
     const sid = schoolId(m.school);
     const d = rawById.get(m.id);
     let docId: string | null = null;
     if (d?.meta) {
       docId = `curriculum:${d.meta.sha256.slice(0, 16)}`;
-      upDoc.run({ id: docId, title: `${m.school} ${m.major_code} 本科培养方案${m.grade_year ? `（${m.grade_year}）` : ''}`, publisher: m.school, edition: m.grade_year || null, url: m.url, sha256: d.meta.sha256, bytes: d.meta.bytes, fetched_at: d.meta.fetched_at, note: m.verified_by ? `verified_by ${m.verified_by}` : null });
+      upDoc.run({ id: docId, title: `${m.school} ${isMultiMajor(m) ? '' : m.major_code + ' '}本科培养方案${isMultiMajor(m) ? '汇编' : ''}${m.grade_year ? `（${m.grade_year}）` : ''}`, publisher: m.school, edition: m.grade_year || null, url: m.url, sha256: d.meta.sha256, bytes: d.meta.bytes, fetched_at: d.meta.fetched_at, note: m.verified_by ? `verified_by ${m.verified_by}` : null });
     }
     const real = clean.results.find((r) => r.source_id === m.id && !r.mock);
-    upSource.run({ id: m.id, school_name: m.school, school_id: sid, major_code: m.major_code, grade_year: m.grade_year || null, url: m.url, format: m.format, verified_by: m.verified_by || null, notes: m.notes || null, source_doc_id: docId, status: d?.error ? 'error' : real ? 'extracted' : d?.meta ? 'fetched' : 'pending', error: d?.error ?? null, updated_at: now });
+    const secs = d?.sections ?? [];
+    const sectionsNote = secs.length ? secs.map((x) => `${x.major_code}${x.variant ? `（${x.variant}）` : ''} p${x.page_start}-${x.page_end}${x.extracted ? ' 抽取' : x.variant ? ' 班级变体，仅记录' : x.pilot ? '' : ' 非试点'}`).join('; ') : null;
+    upSource.run({ id: m.id, school_name: m.school, school_id: sid, major_code: isMultiMajor(m) ? null : m.major_code, major_codes: m.major_code, sections_note: sectionsNote, grade_year: m.grade_year || null, url: m.url, format: m.format, verified_by: m.verified_by || null, notes: m.notes || null, source_doc_id: docId, status: d?.error ? 'error' : real ? 'extracted' : d?.meta ? 'fetched' : 'pending', error: d?.error ?? null, updated_at: now });
+    if (secs.length) {
+      db.prepare('DELETE FROM curriculum_source_major WHERE source_id = ?').run(m.id);
+      const ins = db.prepare(`INSERT INTO curriculum_source_major (source_id, major_code, variant, title, page_start, page_end, printed_pages, is_pilot, extracted, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (source_id, major_code, variant) DO NOTHING`);
+      for (const x of secs) ins.run(m.id, x.major_code, x.variant ?? '', x.title, x.page_start, x.page_end, x.printed_pages, x.pilot ? 1 : 0, x.extracted ? 1 : 0, now);
+    }
     srcMeta.set(m.id, { schoolId: sid, docId, fetchedAt: d?.meta?.fetched_at ?? null, year: /^\d{4}/.test(m.grade_year) ? Number(m.grade_year.slice(0, 4)) : null });
     synced++;
   }
@@ -78,6 +87,7 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
     if (r.mock) { skippedMock += r.courses.length; continue; }
     const doc = rawById.get(r.source_id);
     if (doc?.meta && doc.meta.sha256 !== r.doc_sha256) { console.warn(`[career] curriculum: ${r.source_id} document changed since extraction; re-run clean`); continue; }
+    if (!majors.has(r.major_code)) continue;
     for (const c of r.courses) {
       const courseId = `${s.schoolId}:${normCourseName(c.name)}`;
       upCourse.run({ id: courseId, school_id: s.schoolId, name: c.name, credits: c.credits, hours: c.hours, course_type: c.course_type, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence, model: r.model, source_doc_id: s.docId });

@@ -14,10 +14,12 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { extractCourses, mockProvider, type ExtractionResult } from './extract.js';
 import { RAW_NAME, type RawCurriculum } from './crawler.js';
+import { planUnits, type ExtractUnit } from './plan.js';
+import { isMultiMajor } from './manifest.js';
 
 export interface CleanCurriculum {
   extractedAt: string;
-  results: ({ source_id: string; school: string; major_code: string; doc_sha256: string; url: string } & ExtractionResult)[];
+  results: ({ source_id: string; school: string; major_code: string; section: ExtractUnit['section']; doc_sha256: string; url: string } & ExtractionResult)[];
 }
 
 export async function clean(argv = process.argv.slice(2)) {
@@ -40,13 +42,17 @@ export async function clean(argv = process.argv.slice(2)) {
   try {
     for (const d of raw.docs) {
       if (!d.pages || !d.meta) continue;
-      const name = majorName(d.source.major_code);
-      if (!name) { console.error(`[${RAW_NAME}] unknown major_code ${d.source.major_code} (not in major table)`); continue; }
-      if (!provider.isMock && calls >= maxCalls) { console.warn(`[${RAW_NAME}] --max-calls=${maxCalls} reached, stopping`); break; }
-      const r = await extractCourses(d.pages, { school: d.source.school, majorCode: d.source.major_code, majorName: name }, provider, cache);
-      calls += r.stats.llm_calls;
-      out.results.push({ source_id: d.source.id, school: d.source.school, major_code: d.source.major_code, doc_sha256: d.meta.sha256, url: d.source.url, ...r });
-      console.log(`[${RAW_NAME}] ${d.source.school} ${d.source.major_code}: ${r.courses.length} courses (chunks ${r.stats.sent}/${r.stats.chunks} sent, ${r.stats.cached} cached, ${r.stats.llm_calls} calls, ${r.stats.dropped_unverified} unverified dropped, tokens ${r.stats.prompt_tokens}+${r.stats.completion_tokens})`);
+      const plan = planUnits(d.source, d.pages);
+      if (plan.sections.length > 1 || isMultiMajor(d.source)) console.log(`[${RAW_NAME}] ${d.source.school}: sections ${plan.notes.join('; ') || 'none found'}${plan.missing.length ? `; not found: ${plan.missing.join(',')}` : ''}`);
+      for (const u of plan.units) {
+        const name = majorName(u.major_code);
+        if (!name) { console.error(`[${RAW_NAME}] unknown major_code ${u.major_code} (not in major table)`); continue; }
+        if (!provider.isMock && calls >= maxCalls) { console.warn(`[${RAW_NAME}] --max-calls=${maxCalls} reached, stopping`); break; }
+        const r = await extractCourses(u.pages, { school: d.source.school, majorCode: u.major_code, majorName: name }, provider, cache);
+        calls += r.stats.llm_calls;
+        out.results.push({ source_id: d.source.id, school: d.source.school, major_code: u.major_code, section: u.section, doc_sha256: d.meta.sha256, url: d.source.url, ...r });
+        console.log(`[${RAW_NAME}] ${d.source.school} ${u.major_code}${u.section ? ` (p${u.section.page_start}-${u.section.page_end})` : ''}: ${r.courses.length} courses (chunks ${r.stats.sent}/${r.stats.chunks} sent, ${r.stats.cached} cached, ${r.stats.llm_calls} calls, ${r.stats.dropped_unverified} unverified dropped, tokens ${r.stats.prompt_tokens}+${r.stats.completion_tokens})`);
+      }
     }
   } finally {
     db.close();
