@@ -1,0 +1,58 @@
+/**
+ * LLM stage: extract 专业核心课/主干课 from each fetched 培养方案 -> data/clean/career-curriculum.json.
+ * Uses the real provider when LLM_BASE_URL / LLM_API_KEY / LLM_MODEL are set, otherwise the offline mock
+ * (results flagged mock=true; ingest skips them). Responses are cached in career.db (llm_cache).
+ *   npm run clean:career-curriculum [-- --max-calls=50]   # hard cap on paid LLM calls per run
+ */
+import { existsSync } from 'node:fs';
+import Database from 'better-sqlite3';
+import { cleanPath, rawPath, readJson, writeJson } from '../../lib/io.js';
+import { isMain } from '../../lib/main.js';
+import { providerFromEnv } from '../../lib/llm.js';
+import { migrate } from '../migrate.js';
+import { CAREER_DB } from '../db.js';
+import { SqliteLlmCache } from './cache.js';
+import { extractCourses, mockProvider, type ExtractionResult } from './extract.js';
+import { RAW_NAME, type RawCurriculum } from './crawler.js';
+
+export interface CleanCurriculum {
+  extractedAt: string;
+  results: ({ source_id: string; school: string; major_code: string; doc_sha256: string; url: string } & ExtractionResult)[];
+}
+
+export async function clean(argv = process.argv.slice(2)) {
+  const maxCalls = Number(argv.find((a) => a.startsWith('--max-calls='))?.slice(12) ?? process.env.LLM_MAX_CALLS ?? 200);
+  if (!existsSync(rawPath(RAW_NAME))) {
+    console.log(`[${RAW_NAME}] nothing fetched yet`);
+    await writeJson(cleanPath(RAW_NAME), { extractedAt: new Date().toISOString(), results: [] });
+    console.log(`[${RAW_NAME}] clean: 0 records`);
+    return;
+  }
+  const raw = await readJson<RawCurriculum>(rawPath(RAW_NAME));
+  migrate(CAREER_DB, () => {});
+  const db = new Database(CAREER_DB);
+  const majorName = (code: string) => (db.prepare('SELECT name FROM major WHERE code = ?').get(code) as { name: string } | undefined)?.name;
+  const provider = providerFromEnv(mockProvider());
+  console.log(`[${RAW_NAME}] provider: ${provider.isMock ? 'MOCK (no LLM_* env) — output will not be ingested' : provider.model}`);
+  const cache = new SqliteLlmCache(db);
+  const out: CleanCurriculum = { extractedAt: new Date().toISOString(), results: [] };
+  let calls = 0;
+  try {
+    for (const d of raw.docs) {
+      if (!d.pages || !d.meta) continue;
+      const name = majorName(d.source.major_code);
+      if (!name) { console.error(`[${RAW_NAME}] unknown major_code ${d.source.major_code} (not in major table)`); continue; }
+      if (!provider.isMock && calls >= maxCalls) { console.warn(`[${RAW_NAME}] --max-calls=${maxCalls} reached, stopping`); break; }
+      const r = await extractCourses(d.pages, { school: d.source.school, majorCode: d.source.major_code, majorName: name }, provider, cache);
+      calls += r.stats.llm_calls;
+      out.results.push({ source_id: d.source.id, school: d.source.school, major_code: d.source.major_code, doc_sha256: d.meta.sha256, url: d.source.url, ...r });
+      console.log(`[${RAW_NAME}] ${d.source.school} ${d.source.major_code}: ${r.courses.length} courses (chunks ${r.stats.sent}/${r.stats.chunks} sent, ${r.stats.cached} cached, ${r.stats.llm_calls} calls, ${r.stats.dropped_unverified} unverified dropped, tokens ${r.stats.prompt_tokens}+${r.stats.completion_tokens})`);
+    }
+  } finally {
+    db.close();
+  }
+  await writeJson(cleanPath(RAW_NAME), out);
+  console.log(`[${RAW_NAME}] clean: ${out.results.reduce((n, r) => n + r.courses.length, 0)} records${provider.isMock ? ' (mock)' : ''}`);
+}
+
+if (isMain(import.meta.url)) await clean();

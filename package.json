@@ -37,6 +37,10 @@
     "clean:career-majors": "tsx CAREER/moe_majors/clean.ts",
     "crawl:career-occupations": "tsx CAREER/occupations/crawler.ts",
     "clean:career-occupations": "tsx CAREER/occupations/clean.ts",
+    "crawl:career-curriculum": "tsx CAREER/curriculum/crawler.ts",
+    "clean:career-curriculum": "tsx CAREER/curriculum/clean.ts",
+    "career:curriculum:try": "tsx CAREER/curriculum/try.ts",
+    "test:career": "tsx --test CAREER/curriculum/test/*.test.ts",
     "career:ingest": "tsx CAREER/ingest.ts",
     "career:all": "tsx scripts/run-group.ts CAREER",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",
@@ -61,6 +65,7 @@
     "better-sqlite3": "^11.10.0",
     "cheerio": "^1.2.0",
     "hono": "^4.13.13",
+    "mammoth": "^1.13.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "unpdf": "^1.8.1"

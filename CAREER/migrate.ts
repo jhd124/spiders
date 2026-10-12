@@ -19,7 +19,10 @@ export function migrate(dbPath = CAREER_DB, log: (s: string) => void = console.l
   const db = new Database(dbPath);
   try {
     db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    // FKs are off while migrating (SQLite's recommended practice for schema changes, and it lets seed rows such as
+    // 004's occupation aliases be applied to a fresh DB before ingest loads the referenced rows); violations are
+    // reported below instead of aborting startup.
+    db.pragma('foreign_keys = OFF');
     db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version TEXT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)`);
     const done = new Map(
@@ -50,6 +53,10 @@ export function migrate(dbPath = CAREER_DB, log: (s: string) => void = console.l
       log(`[migrate] applied ${f}`);
     }
     if (!applied.length) log(`[migrate] ${dbPath} up to date`);
+    else {
+      const bad = db.prepare('PRAGMA foreign_key_check').all() as { table: string }[];
+      if (bad.length) log(`[migrate] note: ${bad.length} rows reference rows not loaded yet (${[...new Set(bad.map((b) => b.table))].join(', ')}); run career:ingest`);
+    }
     return applied;
   } finally {
     db.close();

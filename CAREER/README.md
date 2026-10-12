@@ -169,6 +169,41 @@ erDiagram
 - **工科**：仍按"学位授予门类含工学"判定，共 329 个。新增 `engineering_degree_type` 字段，取值 `only`（只授工学，291 个）或 `optional`（可授工学，同时可授其他门类，38 个）。新增 `degree_display` 字段用于控制台显示，例如工程管理显示为"可授工学/管理学"。
 - **一级能力域**：保持 20 个，不合并。
 
+## 培养方案 → 专业核心课（005，curriculum/）
+
+流程：`seeds/curriculum_sources.csv`（专家填链接）→ `curriculum/crawler.ts`（礼貌抓取：robots.txt、按域名间隔 `SPIDERS_DELAY_MS`、真实 UA；原件存 `data/raw/career/curriculum/<id>.<ext>`，sha256 记入 `source_document`）→ 文本抽取（PDF: unpdf 按页、表格单元格用 ` | ` 分隔；HTML: cheerio；DOCX: mammoth；旧版 .doc 不支持，请要 PDF/DOCX）→ `curriculum/clean.ts`（LLM 抽取）→ `career:ingest`（写 `course` / `major_course`，`extraction_method='llm'`、model、confidence、页码、原文片段、`reviewed=0`、`review_status='pending'`）→ 控制台 **课程审核**（`#/review`）逐条 通过/驳回/修改，记录审核人和时间。
+
+清单列：`school,major_code,grade_year,url,format,verified_by,notes`（format = pdf|html|docx|doc；major_code 必须在 major 表；学校按校名对应 `school`，没有则自动新建 `name:<校名>`）。只收 专业核心课/主干课，不收选修。
+
+环境变量（服务器上写入容器 env；不配置则为 mock 模式）：
+
+| 变量 | 说明 |
+|---|---|
+| `LLM_BASE_URL` | OpenAI 兼容地址，如 `https://api.deepseek.com/v1`、`https://dashscope.aliyuncs.com/compatible-mode/v1`、`https://api.openai.com/v1` |
+| `LLM_API_KEY` | 密钥 |
+| `LLM_MODEL` | 如 `deepseek-chat`、`qwen-plus`、`gpt-4o-mini` |
+| `LLM_JSON_MODE` | 默认开启 `response_format=json_object`；不支持的服务设 `0` |
+| `LLM_CHUNK_CHARS` | 每块最大字符数，默认 6000 |
+| `LLM_MAX_CALLS` | 每次 clean 最多付费调用次数，默认 200（也可 `-- --max-calls=N`） |
+| `LLM_TIMEOUT_MS` | 默认 120000 |
+| `LLM_MOCK=1` | 强制 mock |
+| `CURRICULUM_MANIFEST` | 替换清单路径（测试用） |
+
+命令：
+
+```bash
+npm run career:curriculum:try -- --url='<链接>' --format=pdf --school=山东大学 --major=080901   # 单个链接试跑，不写库 -> data/tmp/curriculum-try.json
+docker exec spiders npx tsx scripts/run-group.ts CAREER curriculum                            # 只跑培养方案：抓取 -> 抽取 -> 入库
+docker exec spiders npm run career:all                                                        # 全部（清单为空时课程这一步 0 条）
+npm run test:career                                                                           # 离线测试（无需 key）
+```
+
+防编造：mock（未配置 LLM）结果带 `mock:true`，ingest 跳过，绝不入库；模型返回的每门课都必须给出原文片段，片段须在该块原文中逐字出现（忽略空白和 ` | `）且包含课程名，否则丢弃；JSON 按 schema 严格校验；同名课程合并，保留置信度高者。已审核（approved/rejected/edited）的行重跑不会被覆盖；文档 sha256 变了而未重新抽取时不入库。
+
+成本控制：只把含 核心课/主干课/课程设置/学位课/教学计划 等关键词的块发给模型；按 sha256(model+提示词版本+块) 缓存在 `llm_cache`，重跑不重复付费（改模型或 `PROMPT_VERSION` 才会重新调用）；temperature 0；`LLM_MAX_CALLS` 硬上限；日志打印每份文档的块数、调用数、token 数。实测山大 080901（16 页）≈ 3 块、约 9k 输入 token/份；25 专业 × 4 校 ≈ 100 份 ≈ 100 万输入 token。
+
+第二阶段（课程 → 技能）：`curriculum/skills.ts` 的 `SkillTagger` 接口，目前为 `NoopSkillTagger`（二级技能未定义）。
+
 ## 专家决策（取代原来的开放问题）
 
 1. **省份**：先做山东（专业(类)+院校模式，最多 96 个志愿，每个志愿对应一个专业(类)；山东省教育招生考试院每年公布一分一段表和投档线），再做浙江。`admission_rank` 粒度是"院校 × 专业(类) × 年 × 省"，字段包括最低分和最低位次；按专业类招生时填 `major_class_code`。

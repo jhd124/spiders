@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import { ROOT } from '../../lib/io.js';
 import { discoverGroups } from '../../lib/discovery.js';
 import { HttpError, RunManager } from './runs.js';
+import { review } from './review.js';
 import { describeDataset, getItem, listDatasets, queryDataset } from './query.js';
 import type { CrawlerView, GroupView, LogLine, Run, Task } from '../shared/types.js';
 
@@ -164,6 +165,8 @@ app.get('/api/datasets/:group/items', async (c) =>
 app.get('/api/datasets/:group/items/:id{.+}', async (c) =>
   c.json(await getItem(c.req.param('group'), decodeURIComponent(c.req.param('id')))),
 );
+
+app.route('/api/review/curriculum', review);
 
 app.all('/api/*', (c) => c.json({ error: 'not found' }, 404));
 

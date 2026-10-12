@@ -18,6 +18,7 @@ import datasets from './dataset.js';
 import type { ParsedCatalog } from './moe_majors/clean.js';
 import { LEVEL_NAMES, type Occupation } from './occupations/clean.js';
 import type { FetchedDoc } from './fetchdoc.js';
+import { ingestCurriculum } from './curriculum/load.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 type DocMeta = Omit<FetchedDoc, 'path'>;
@@ -238,6 +239,7 @@ export function ingest(only: string[] = []) {
       if (want('moe_majors') && existsSync(cleanPath('career-moe_majors'))) ingestMajors(db);
       if (want('occupations') && existsSync(cleanPath('career-occupations'))) ingestOccupations(db);
       ingestSchools(db);
+      if (want('curriculum')) ingestCurriculum(db);
     })();
     for (const d of datasets) console.log(`[career] fts ${d.fts.table}: ${rebuildFts(db, d)} rows`);
   } finally {
