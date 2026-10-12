@@ -12,10 +12,12 @@ export const SCHOOLS = {
   brown: 'Brown University',
   dartmouth: 'Dartmouth College',
   cornell: 'Cornell University',
+  stanford: 'Stanford University',
+  mit: 'Massachusetts Institute of Technology',
 } as const;
 export type SchoolKey = keyof typeof SCHOOLS;
 
-export const PLATFORMS = ['edX', 'Coursera', 'Harvard Online Learning', 'Open Yale Courses', 'Other'] as const;
+export const PLATFORMS = ['edX', 'Coursera', 'Harvard Online Learning', 'Open Yale Courses', 'Stanford Engineering Everywhere', 'MIT OpenCourseWare', 'MITx', 'Other'] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const LEVELS = ['introductory', 'intermediate', 'advanced', 'mixed'] as const;

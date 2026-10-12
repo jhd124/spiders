@@ -1,6 +1,6 @@
 # spiders
 
-藤校（常春藤盟校）公开课 / MOOC 信息爬虫，TypeScript + Node 20。
+藤校（常春藤盟校）及 Stanford、MIT 的公开课 / MOOC 信息爬虫，TypeScript + Node 20。
 
 ## 目录结构
 
@@ -21,7 +21,7 @@ web/                   # Web 控制台（见下文）
 data/                  # 输出目录（已 gitignore）：raw/ clean/ courses.db web.db logs/
 ```
 
-学校：`harvard` `yale` `princeton` `columbia` `upenn` `brown` `dartmouth` `cornell`
+学校：`harvard` `yale` `princeton` `columbia` `upenn` `brown` `dartmouth` `cornell` `stanford` `mit`
 
 ## 数据来源
 
@@ -35,6 +35,8 @@ data/                  # 输出目录（已 gitignore）：raw/ clean/ courses.d
 | brown | edX `school/brownx`（Brown 不在 Coursera） |
 | dartmouth | Coursera `partners/dartmouth` + edX `school/dartmouthx` |
 | cornell | edX `school/cornellx`（eCornell 是付费证书项目，未收录） |
+| stanford | Stanford Engineering Everywhere https://see.stanford.edu/Course（含详情页）+ Coursera `partners/stanford` + edX `school/stanfordonline`。online.stanford.edu 对非浏览器 UA 一律 403（含 robots.txt），我们不伪装 UA，暂未收录（TODO） |
+| mit | MIT OpenCourseWare：MIT Learn 公开目录 API `api.learn.mit.edu/api/v1/courses/?platform=ocw`（learn.mit.edu / OCW 搜索用的同一接口）+ 同一 API 的 MITx（`offered_by=mitx`：MITx Online、Open Learning Library）。edX 的 `school/mitx` 现已重定向到 edX 首页，不再可用 |
 
 - Coursera：robots.txt 禁止 `/api/`，所以不调 API，而是解析合作方页面和课程页 `/learn/<slug>` 里服务端渲染的 Apollo 数据。
 - edX：解析学校页 Next.js RSC 数据里内嵌的课程记录（edX 只给讲师 slug，讲师名是由 slug 还原的）。
@@ -44,7 +46,7 @@ data/                  # 输出目录（已 gitignore）：raw/ clean/ courses.d
 
 ```bash
 npm install
-npm run all                     # MOOC 组 8 所学校全部 crawl + clean + 入库（= tsx scripts/run-group.ts MOOC）
+npm run all                     # MOOC 组全部学校全部 crawl + clean + 入库（= tsx scripts/run-group.ts MOOC）
 npm run all -- yale brown       # 只跑部分学校
 npm run all -- --no-details     # 跳过逐课详情页（快很多，但缺简介/讲师）
 
