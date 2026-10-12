@@ -11,9 +11,14 @@ MOOC/
   <school>/
     crawler.ts         # 爬虫：抓原始数据 -> data/raw/<school>.json
     clean.ts           # 清洗：raw -> 符合 schema 的 data/clean/<school>.json
-lib/                   # 共用工具：礼貌请求(robots.txt/限速/UA)、Coursera/edX 解析、文本清洗
-scripts/run-all.ts     # 一键 crawl -> clean -> ingest
-data/                  # 输出目录（已 gitignore）
+  dataset.ts           # Web 查询页配置（表、搜索列、筛选项、列表列）
+lib/                   # 共用工具：礼貌请求(robots.txt/限速/UA)、Coursera/edX 解析、文本清洗、分组发现
+scripts/run-group.ts   # 按分组一键 crawl -> clean -> ingest
+web/                   # Web 控制台（见下文）
+  server/              # Hono API：爬虫发现、子进程运行、运行历史、SSE 日志、数据查询
+  client/              # React + Vite 前端
+  shared/types.ts      # 前后端共用类型
+data/                  # 输出目录（已 gitignore）：raw/ clean/ courses.db web.db logs/
 ```
 
 学校：`harvard` `yale` `princeton` `columbia` `upenn` `brown` `dartmouth` `cornell`
@@ -39,14 +44,14 @@ data/                  # 输出目录（已 gitignore）
 
 ```bash
 npm install
-npm run all                     # 8 所学校全部 crawl + clean + 入库
+npm run all                     # MOOC 组 8 所学校全部 crawl + clean + 入库（= tsx scripts/run-group.ts MOOC）
 npm run all -- yale brown       # 只跑部分学校
 npm run all -- --no-details     # 跳过逐课详情页（快很多，但缺简介/讲师）
 
 npm run crawl:yale              # 单独爬
 npm run clean:yale              # 单独清洗
 npm run ingest                  # 把 data/clean 下所有学校入库
-npm run typecheck
+npm run typecheck               # 后端 + 前端类型检查
 ```
 
 环境变量：`SPIDERS_DB`（数据库路径，默认 `data/courses.db`）、`SPIDERS_DATA_DIR`、`SPIDERS_DELAY_MS`、`SPIDERS_UA`。
@@ -54,8 +59,35 @@ npm run typecheck
 入库表 `courses`，主键 `id`（`<school>:<platform>:<sourceId>`），`(school, url)` 唯一；数组字段存 JSON 文本。
 换数据库：在 `MOOC/ingest.ts` 里实现 `CourseStore` 接口（init / upsert / close），在 `openStore()` 返回即可。
 
+## Web 控制台
+
+```bash
+npm run web:dev      # 开发：API http://127.0.0.1:8787 + 前端 http://127.0.0.1:5173（热更新，/api 代理到 8787）
+npm run web:build    # 构建前端到 web/dist
+npm run web:start    # 生产：单进程 http://127.0.0.1:8787（API + 静态页面）
+```
+
+- **爬虫管理**：自动扫描仓库顶层目录，凡是 `<分组>/<名字>/crawler.ts` 都算一个爬虫，按顶层目录分组（`MOOC` 是第一个分组，新增分组无需改代码）。
+  每个爬虫可单独「爬取 / 清洗 / 入库 / 全流程」，可停止；分组可「全部运行（crawl→clean→ingest）」和「整组入库」；可勾选 `--no-details`。
+- 每次运行都是子进程，运行历史（开始/结束时间、状态 running/success/failed/stopped、退出码、PID、从日志解析的抓取/清洗/入库条数）存在 `data/web.db`；
+  stdout/stderr 按行带时间戳存为 `data/logs/<id>.jsonl`。运行详情页通过 SSE 实时推送日志，历史运行可回看、可下载纯文本日志。
+- 同一爬虫（或同一分组的整组任务）同时只允许一个运行；服务重启时遗留的 running 记录会标记为 failed。
+- **数据查询**：关键词（标题/简介/讲师/标签）、学校、平台、难度、状态、是否免费筛选，分页，点击行看详情。
+- **⚠️ 无鉴权**：默认只监听 `127.0.0.1`。可用 `HOST` / `PORT` 改，但不要直接暴露到公网（任何能访问的人都能启动/停止爬虫）。
+
+### 分组约定（新增分组时）
+
+| 文件 | 必需 | 作用 |
+| --- | --- | --- |
+| `<分组>/<名字>/crawler.ts` | ✓ | 爬虫，接受 `--flag` 参数 |
+| `<分组>/<名字>/clean.ts` | | 清洗 |
+| `<分组>/ingest.ts` | | 入库，参数为爬虫名（不传 = 全部） |
+| `<分组>/dataset.ts` | | `export default defineDataset({...})`（见 `lib/dataset.ts`），配置数据库路径、表、搜索列、筛选项、列表列，查询页自动出现 |
+
+日志里的条数按约定解析：`[x] 来源: N records`（抓取）、`clean: N`（清洗）、`upserted N`（入库）。
+
 ## 加一所学校 / 一个来源
 
 1. 在 `MOOC/schema.ts` 的 `SCHOOLS` 里加 key；
 2. 新建 `MOOC/<school>/crawler.ts`（用 `runSources` 写 raw）和 `clean.ts`（输出 `Course[]`，用 `writeClean` 校验去重）；
-3. `package.json` 加 `crawl:<school>` / `clean:<school>`。
+3. `package.json` 加 `crawl:<school>` / `clean:<school>`（Web 控制台会自动发现，无需改动）。

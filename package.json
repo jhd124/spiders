@@ -27,17 +27,30 @@
     "crawl:all": "npm run crawl:harvard && npm run crawl:yale && npm run crawl:princeton && npm run crawl:columbia && npm run crawl:upenn && npm run crawl:brown && npm run crawl:dartmouth && npm run crawl:cornell",
     "clean:all": "npm run clean:harvard && npm run clean:yale && npm run clean:princeton && npm run clean:columbia && npm run clean:upenn && npm run clean:brown && npm run clean:dartmouth && npm run clean:cornell",
     "ingest": "tsx MOOC/ingest.ts",
-    "all": "tsx scripts/run-all.ts",
-    "typecheck": "tsc --noEmit"
+    "all": "tsx scripts/run-group.ts MOOC",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",
+    "web:server": "tsx web/server/index.ts",
+    "web:dev": "concurrently -k -n api,ui -c blue,magenta \"tsx watch --clear-screen=false web/server/index.ts\" \"vite --config web/vite.config.ts\"",
+    "web:build": "vite build --config web/vite.config.ts",
+    "web:start": "tsx web/server/index.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20.19.43",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^9.2.5",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.4",
     "better-sqlite3": "^11.10.0",
-    "cheerio": "^1.2.0"
+    "cheerio": "^1.2.0",
+    "hono": "^4.13.13",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   }
 }

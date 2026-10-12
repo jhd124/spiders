@@ -9,7 +9,16 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "noEmit": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["lib/**/*.ts", "MOOC/**/*.ts", "scripts/**/*.ts"]
+  "include": [
+    "lib/**/*.ts",
+    "MOOC/**/*.ts",
+    "scripts/**/*.ts",
+    "web/server/**/*.ts",
+    "web/shared/**/*.ts",
+    "web/vite.config.ts"
+  ]
 }
