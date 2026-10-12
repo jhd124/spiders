@@ -65,6 +65,8 @@ export interface DatasetView {
   reason?: string;
   total: number;
   filters: FilterView[];
+  /** topic presets with match counts */
+  topics: { key: string; label: string; count: number }[];
   listColumns: { column: string; label: string; format?: string }[];
   idColumn: string;
   titleColumn: string;

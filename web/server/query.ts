@@ -10,6 +10,7 @@ import Database from 'better-sqlite3';
 import { ROOT } from '../../lib/io.js';
 import { discoverGroups } from '../../lib/discovery.js';
 import type { DatasetConfig } from '../../lib/dataset.js';
+import { ensureFts, keywordCondition, registerFunctions, topicCondition } from '../../lib/fts.js';
 import type { DatasetView, QueryResult } from '../shared/types.js';
 import { HttpError } from './runs.js';
 
@@ -27,7 +28,9 @@ async function loadConfig(group: string): Promise<DatasetConfig> {
 function open(cfg: DatasetConfig): { db: Database.Database; cols: Set<string> } | null {
   if (!existsSync(cfg.dbPath)) return null;
   if (!IDENT.test(cfg.table)) throw new HttpError(500, `bad table name ${cfg.table}`);
+  ensureFts(cfg); // build / refresh the keyword index if ingest hasn't (cheap when fresh)
   const db = new Database(cfg.dbPath, { readonly: true, fileMustExist: true });
+  registerFunctions(db);
   const cols = new Set((db.prepare(`PRAGMA table_info(${cfg.table})`).all() as { name: string }[]).map((c) => c.name));
   if (!cols.size) {
     db.close();
@@ -55,6 +58,7 @@ export async function listDatasets(): Promise<DatasetView[]> {
         reason: err instanceof Error ? err.message : String(err),
         total: 0,
         filters: [],
+        topics: [],
         listColumns: [],
         idColumn: 'id',
         titleColumn: 'id',
@@ -73,6 +77,7 @@ export async function describeDataset(group: string): Promise<DatasetView> {
     available: false,
     total: 0,
     filters: [],
+    topics: [],
     listColumns: cfg.listColumns,
     idColumn: cfg.idColumn,
     titleColumn: cfg.titleColumn,
@@ -94,7 +99,12 @@ export async function describeDataset(group: string): Promise<DatasetView> {
       });
       return { key: f.key, label: f.label, type: f.type, options };
     });
-    return { ...base, available: true, total, filters };
+    const topics = (cfg.topics ?? []).map((tp) => {
+      const cond = topicCondition(cfg, tp);
+      const n = (db.prepare(`SELECT COUNT(*) n FROM ${cfg.table} t WHERE ${cond.sql}`).get(...cond.params) as { n: number }).n;
+      return { key: tp.key, label: tp.label, count: n };
+    });
+    return { ...base, available: true, total, filters, topics };
   } finally {
     o.db.close();
   }
@@ -126,10 +136,19 @@ export async function queryDataset(group: string, params: URLSearchParams): Prom
     const args: unknown[] = [];
     const q = params.get('q')?.trim();
     if (q) {
-      const parts = cfg.searchColumns.map((c) => `${col(cols, c)} LIKE ? ESCAPE '\\'`);
-      where.push(`(${parts.join(' OR ')})`);
-      const like = `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
-      for (let i = 0; i < parts.length; i++) args.push(like);
+      const kw = keywordCondition(cfg, q);
+      if (kw) {
+        where.push(kw.sql);
+        args.push(...kw.params);
+      }
+    }
+    const topicKey = params.get('topic');
+    if (topicKey) {
+      const tp = cfg.topics?.find((x) => x.key === topicKey);
+      if (!tp) throw new HttpError(400, `unknown topic ${topicKey}`);
+      const cond = topicCondition(cfg, tp);
+      where.push(cond.sql);
+      args.push(...cond.params);
     }
     for (const f of cfg.filters) {
       const vals = params.getAll(f.key).filter((v) => v !== '');
@@ -151,10 +170,10 @@ export async function queryDataset(group: string, params: URLSearchParams): Prom
     const sortParam = params.get('sort');
     const sortCol = col(cols, sortParam && cols.has(sortParam) ? sortParam : (cfg.defaultSort ?? cfg.idColumn));
     const dir = params.get('dir') === 'desc' ? 'DESC' : 'ASC';
-    const total = (db.prepare(`SELECT COUNT(*) n FROM ${cfg.table} ${w}`).get(...args) as { n: number }).n;
+    const total = (db.prepare(`SELECT COUNT(*) n FROM ${cfg.table} t ${w}`).get(...args) as { n: number }).n;
     const items = (
       db
-        .prepare(`SELECT * FROM ${cfg.table} ${w} ORDER BY ${sortCol} ${dir}, ${col(cols, cfg.idColumn)} LIMIT ? OFFSET ?`)
+        .prepare(`SELECT t.* FROM ${cfg.table} t ${w} ORDER BY t.${sortCol} ${dir}, t.${col(cols, cfg.idColumn)} LIMIT ? OFFSET ?`)
         .all(...args, pageSize, (page - 1) * pageSize) as Record<string, unknown>[]
     ).map((r) => parseRow(cfg, r));
     return { total, page, pageSize, items };

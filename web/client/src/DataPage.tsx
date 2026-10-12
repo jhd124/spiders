@@ -29,6 +29,7 @@ export function DataPage({ group }: { group?: string }) {
   const [q, setQ] = useState('');
   const [qInput, setQInput] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [topic, setTopic] = useState('');
   const [page, setPage] = useState(1);
   const [res, setRes] = useState<QueryResult | null>(null);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
@@ -41,6 +42,7 @@ export function DataPage({ group }: { group?: string }) {
 
   useEffect(() => {
     setFilters({});
+    setTopic('');
     setQ('');
     setQInput('');
     setPage(1);
@@ -50,9 +52,10 @@ export function DataPage({ group }: { group?: string }) {
   const params = useMemo(() => {
     const p = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
     if (q) p.set('q', q);
+    if (topic) p.set('topic', topic);
     for (const [k, v] of Object.entries(filters)) if (v) p.set(k, v);
     return p;
-  }, [q, filters, page]);
+  }, [q, topic, filters, page]);
 
   useEffect(() => {
     if (!ds?.available) return;
@@ -100,7 +103,30 @@ export function DataPage({ group }: { group?: string }) {
                   setQ(qInput.trim());
                 }}
               >
-                <input className="search" placeholder="关键词：标题 / 简介 / 讲师 / 标签" value={qInput} onChange={(e) => setQInput(e.target.value)} />
+                <input
+                  className="search"
+                  placeholder='关键词（整词匹配）："machine learning" 短语，learn* 前缀，OR'
+                  title='整词匹配，多个词=同时包含；"双引号"=短语；词尾 *=前缀；OR=或；全大写缩写（如 AI）区分大小写'
+                  value={qInput}
+                  onChange={(e) => setQInput(e.target.value)}
+                />
+                {ds.topics.length > 0 && (
+                  <label>
+                    主题
+                    <select
+                      value={topic}
+                      onChange={(e) => {
+                        setPage(1);
+                        setTopic(e.target.value);
+                      }}
+                    >
+                      <option value="">全部</option>
+                      {ds.topics.map((t) => (
+                        <option key={t.key} value={t.key}>{t.label} ({t.count})</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 {ds.filters.map((f) => (
                   <label key={f.key}>
                     {f.label}
@@ -127,6 +153,7 @@ export function DataPage({ group }: { group?: string }) {
                     setQ('');
                     setQInput('');
                     setFilters({});
+                    setTopic('');
                     setPage(1);
                   }}
                 >重置</button>

@@ -55,7 +55,7 @@ button.danger { background: var(--bad); border-color: var(--bad); }
 .filters { display: flex; gap: 12px; padding: 12px 16px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid var(--line); }
 .filters label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
 .filters select, .filters input { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; }
-.filters .search { width: 280px; }
+.filters .search { width: 360px; }
 .pager { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 12px; }
 .tabs { display: flex; gap: 12px; margin-bottom: 12px; }
 .tabs a.active { font-weight: 700; }

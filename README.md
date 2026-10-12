@@ -72,7 +72,12 @@ npm run web:start    # 生产：单进程 http://127.0.0.1:8787（API + 静态�
 - 每次运行都是子进程，运行历史（开始/结束时间、状态 running/success/failed/stopped、退出码、PID、从日志解析的抓取/清洗/入库条数）存在 `data/web.db`；
   stdout/stderr 按行带时间戳存为 `data/logs/<id>.jsonl`。运行详情页通过 SSE 实时推送日志，历史运行可回看、可下载纯文本日志。
 - 同一爬虫（或同一分组的整组任务）同时只允许一个运行；服务重启时遗留的 running 记录会标记为 failed。
-- **数据查询**：关键词（标题/简介/讲师/标签）、学校、平台、难度、状态、是否免费筛选，分页，点击行看详情。
+- **数据查询**：关键词、主题预设、学校、平台、难度、状态、是否免费筛选，分页，点击行看详情。
+  - 关键词走 SQLite FTS5 全文索引（标题/简介/讲师/学科/标签），**整词匹配**、不区分大小写：`AI` 不会再命中 maintain / detail / Spain。
+    多个词 = 同时包含；`"machine learning"` = 短语；`learn*` = 前缀（只有加 `*` 才做前缀）；`OR` = 或。
+    全大写的短缩写（如 `AI`、`NLP`、`LLM`）额外要求原样大写出现。
+  - 主题：MOOC 内置 `AI`（标题/简介/学科/标签任一提及 AI 相关词，如 artificial intelligence、machine learning、deep learning、neural network(s)、LLM、generative AI、ChatGPT、NLP、computer vision、reinforcement learning…；`AI` 只匹配大写整词）和 `AI 核心课`（只看标题/学科）。
+  - 索引表 `courses_fts` 由 `npm run ingest` 重建；Web 服务发现索引缺失或过期（行数 / `ingested_at` 变化）时也会自动重建一次。
 - **⚠️ 无鉴权**：默认只监听 `127.0.0.1`。可用 `HOST` / `PORT` 改，但不要直接暴露到公网（任何能访问的人都能启动/停止爬虫）。
 
 ### 分组约定（新增分组时）
@@ -82,7 +87,7 @@ npm run web:start    # 生产：单进程 http://127.0.0.1:8787（API + 静态�
 | `<分组>/<名字>/crawler.ts` | ✓ | 爬虫，接受 `--flag` 参数 |
 | `<分组>/<名字>/clean.ts` | | 清洗 |
 | `<分组>/ingest.ts` | | 入库，参数为爬虫名（不传 = 全部） |
-| `<分组>/dataset.ts` | | `export default defineDataset({...})`（见 `lib/dataset.ts`），配置数据库路径、表、搜索列、筛选项、列表列，查询页自动出现 |
+| `<分组>/dataset.ts` | | `export default defineDataset({...})`（见 `lib/dataset.ts`），配置数据库路径、表、全文索引列（`fts`）、主题预设（`topics`）、筛选项、列表列，查询页自动出现 |
 
 日志里的条数按约定解析：`[x] 来源: N records`（抓取）、`clean: N`（清洗）、`upserted N`（入库）。
 

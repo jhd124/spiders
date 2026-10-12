@@ -15,11 +15,15 @@ import Database from 'better-sqlite3';
 import { ARRAY_FIELDS, COURSE_COLUMNS, SCHOOLS, validateCourse, type Course, type SchoolKey } from './schema.js';
 import { CLEAN_DIR, DATA_DIR, cleanPath, readJson } from '../lib/io.js';
 import { isMain } from '../lib/main.js';
+import { rebuildFts } from '../lib/fts.js';
+import dataset from './dataset.js';
 
 export interface CourseStore {
   init(): void | Promise<void>;
   /** Insert or update by primary key `id`; returns number of rows written. */
   upsert(courses: Course[]): number | Promise<number>;
+  /** refresh derived structures (e.g. the full-text search index) after a batch of upserts */
+  finalize?(): void | Promise<void>;
   close(): void | Promise<void>;
 }
 
@@ -75,6 +79,11 @@ export class SqliteStore implements CourseStore {
     return tx(courses);
   }
 
+  finalize(): void {
+    const n = rebuildFts(this.db, { ...dataset, table: this.table });
+    console.log(`[ingest] full-text index ${dataset.fts.table}: ${n} rows`);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -105,6 +114,7 @@ export async function ingest(schools: SchoolKey[]): Promise<void> {
       total += n;
       console.log(`[ingest] ${school}: upserted ${n}`);
     }
+    await store.finalize?.();
   } finally {
     await store.close();
   }
