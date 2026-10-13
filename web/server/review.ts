@@ -1,7 +1,7 @@
 /**
  * 培养方案 course review API (CAREER major_course rows extracted by the LLM).
  *   GET  /api/review/curriculum/groups                 school x major with counts per review_status
- *   GET  /api/review/curriculum/items?school_id=&major_code=[&needs_review=1][&evidence_type=原文明确|课名推断]   (tags: skill + 标签依据 evidence_quote + needs_review)
+ *   GET  /api/review/curriculum/items?school_id=&major_code=[&needs_review=1][&evidence_type=原文明确|核心课名|课名推断]   (tags: skill + 标签依据 evidence_quote + needs_review)
  *   POST /api/review/curriculum/action  {school_id, major_code, course_id, action: approve|reject|edit, reviewer, edits?, note?}
  */
 import { existsSync } from 'node:fs';
@@ -36,7 +36,7 @@ review.get('/items', (c) => {
   if (!school || !major) throw new HttpError(400, 'school_id and major_code are required');
   const onlyReview = c.req.query('needs_review') === '1';
   const ev = c.req.query('evidence_type') ?? '';
-  if (ev && ev !== '原文明确' && ev !== '课名推断') throw new HttpError(400, 'evidence_type must be 原文明确 or 课名推断');
+  if (ev && !['原文明确', '核心课名', '课名推断'].includes(ev)) throw new HttpError(400, 'evidence_type must be 原文明确, 核心课名 or 课名推断');
   return c.json(withDb((db) => db.prepare(`
     SELECT mc.school_id, mc.major_code, mc.course_id, co.name, mc.course_type, mc.table_block, mc.module, mc.core_in_section, mc.is_core, mc.credits, mc.hours, mc.semester, mc.source_page,
       mc.snippet, mc.source_url, mc.model, mc.confidence, mc.review_status, mc.reviewer, mc.reviewed_at, mc.review_note, mc.plan_year,

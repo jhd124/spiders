@@ -11,19 +11,75 @@ import { cacheKey, type LlmCache } from './cache.js';
 export const TAG_PROMPT_VERSION = 'course-skill-v3.3-evidence-type';
 export const MAX_SKILLS_PER_COURSE = 3;
 /** bump when the code-side validation of model output changes (part of the per-course tagging cache key) */
-export const TAG_VALIDATION_VERSION = 2;
+export const TAG_VALIDATION_VERSION = 3;
 export const TAG_RULES_VERSION = `${TAG_PROMPT_VERSION}+val${TAG_VALIDATION_VERSION}`;
 
 /** Expert rule (2026-10-13): how a tag is supported by the 培养方案.
  *  原文明确 = the source text says it beyond the bare course name; 课名推断 = only the course name (or its table row) supports it. */
 export type EvidenceType = '原文明确' | '课名推断';
+/** stored course_skill.evidence_type: the tagger's type, plus 核心课名 assigned deterministically afterwards (see coreNameMatches) */
+export type StoredEvidenceType = EvidenceType | '核心课名';
 /** Recommendation weight per evidence type (course_skill.weight = EVIDENCE_WEIGHT[type] × rank factor 1, 0.75, 0.5).
- *  原文明确 counts fully; a course-name inference counts half. */
-export const EVIDENCE_WEIGHT: Record<EvidenceType, number> = { '原文明确': 1.0, '课名推断': 0.5 };
+ *  原文明确 counts fully; 核心课名 (a 正文-listed core course whose name is the skill) 0.8; other course-name inference half. */
+export const EVIDENCE_WEIGHT: Record<StoredEvidenceType, number> = { '原文明确': 1.0, '核心课名': 0.8, '课名推断': 0.5 };
 /** 课名推断: at most this many skills per course, and never a 工具与技术 skill. */
 export const MAX_NAME_INFERRED = 2;
 export const rankFactor = (i: number) => Number((1 - i * 0.25).toFixed(2));
-export const tagWeight = (t: EvidenceType, rank: number) => Number((EVIDENCE_WEIGHT[t] * rankFactor(rank)).toFixed(3));
+export const tagWeight = (t: StoredEvidenceType, rank: number) => Number((EVIDENCE_WEIGHT[t] * rankFactor(rank)).toFixed(3));
+
+/**
+ * 核心课名 (expert, 2026-10-13): a 课名推断 tag is upgraded to 核心课名 when the course is a 正文-listed core course (is_core = 1)
+ * AND its name basically IS the skill name. Deterministic and conservative:
+ *   - explicit mapping CORE_NAME_MAP (course name -> skill name), or
+ *   - equality after normalizing both names: drop a trailing （…） (双语, (1)…) and the suffixes in CORE_NAME_STRIP.
+ * Containment / synonyms never count (算法设计与分析 ≠ 数据结构与算法, 计算机系统导论 ≠ 操作系统原理, 人工智能引论 ≠ 机器学习).
+ * Runs as a post-step over stored course_skill rows (no LLM call, does not change which skills are tagged, not part of the
+ * per-course tagging cache key). Bump CORE_NAME_VERSION when the rule changes.
+ */
+export const CORE_NAME_VERSION = 1;
+export const CORE_NAME_MAP: Record<string, string> = {
+  '操作系统': '操作系统原理',
+  '编译原理': '编译原理',
+  '数据结构与算法': '数据结构与算法',
+  '软件工程': '软件工程方法',
+  '离散数学': '离散数学',
+  '计算机网络': '计算机网络协议',
+  '计算机组成与系统结构': '计算机组成与体系结构',
+  '计算机组成原理': '计算机组成与体系结构',
+};
+export const CORE_NAME_STRIP = ['与体系结构', '与系统结构', '体系结构', '原理', '方法', '协议', '系统'];
+const coreNorm = (s: string) => {
+  let x = normQuote(s).replace(/[（(][^）)]*[）)]$/, '');
+  for (let changed = true; changed;) { changed = false; for (const suf of CORE_NAME_STRIP) if (x.length > suf.length + 1 && x.endsWith(suf)) { x = x.slice(0, -suf.length); changed = true; } }
+  return x;
+};
+export function coreNameMatches(courseName: string, skillName: string): boolean {
+  const base = normQuote(courseName).replace(/[（(][^）)]*[）)]$/, '');
+  if (CORE_NAME_MAP[base] !== undefined) return CORE_NAME_MAP[base] === skillName;
+  return coreNorm(courseName) === coreNorm(skillName);
+}
+/** final stored type for a tag: 课名推断 on an is_core course whose name is the skill -> 核心课名; otherwise unchanged */
+export const storedEvidenceType = (base: StoredEvidenceType, isCoreCourse: boolean, courseName: string, skillName: string): StoredEvidenceType =>
+  base === '原文明确' ? base : isCoreCourse && coreNameMatches(courseName, skillName) ? '核心课名' : '课名推断';
+
+/** Tool skills (expert, 2026-10-13): 原文明确 when the tool name literally appears in the course name, or a quote with content
+ *  beyond the course name names it. TOOL_NAME_WHITELIST holds the explicitly approved course-name exceptions. Anything else: dropped. */
+export const TOOL_NAME_LITERAL: Record<string, RegExp> = {
+  'software.c-cpp': /C语言|C\+\+/i,
+  'software.java': /Java/i,
+  'software.python': /Python/i,
+  'software.db-sql': /SQL/i,
+  'software.linux': /Linux/i,
+  'software.web-frontend': /前端|HTML|JavaScript/i,
+  'software.backend': /后端/i,
+  'data.bigdata-platform': /Hadoop|Spark/i,
+  'data.bi-tools': /商业智能|Tableau|Power ?BI/i,
+  'hardware.fpga': /FPGA|Verilog|VHDL/i,
+  'ai.llm-apps': /大模型|大语言模型|LLM/i,
+};
+export const TOOL_NAME_WHITELIST: Record<string, string[]> = {
+  '数据库系统': ['software.db-sql'], // approved by the expert 2026-10-13
+};
 
 /** Table-row noise: course codes, numbers, separators and the usual column words (学分/学时/考试…). */
 const ROW_NOISE = /[A-Za-z0-9.\s|｜\u00a0,，、。;；:：()（）\[\]【】\-—_/*+~]+|考试|考查|必修|选修|限选|任选|学分|学时|学期|周数|理论|实验|实践|上机|小计|应修|合计|双语|全英文?|秋|春|夏/g;
@@ -142,12 +198,16 @@ export function parseTagResponse(text: string, courses: CourseForTagging[], skil
       const found = !!quote && hay.includes(normQuote(quote));
       // a tool skill is only allowed when the verified quote names the tool; otherwise drop it (never accept a guessed tool)
       const term = TOOL_TERMS[id] ?? (typeOf.get(id) === '工具与技术' ? new RegExp(skills.find((x) => x.id === id)!.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null);
-      if (term && !(found && term.test(quote!))) { errors.push(`${c.name}: tool skill ${id} dropped (source text does not name it)`); continue; }
       // evidence type: the model's claim, downgraded by code when the quote is unverified or holds nothing beyond the course name.
-      // A tool whose name is literally part of the course name (数据库系统 -> 数据库与SQL) counts as named by the text (原文明确).
       const nameOnly = !found || quoteIsNameOnly(quote!, c.name, allNames);
-      const namedInCourseName = !!term && found && term.test(c.name);
-      const evidence_type: EvidenceType = namedInCourseName ? '原文明确' : s.evidence_type === '课名推断' || nameOnly ? '课名推断' : '原文明确';
+      let evidence_type: EvidenceType = s.evidence_type === '课名推断' || nameOnly ? '课名推断' : '原文明确';
+      if (term) {
+        const base = normQuote(c.name).replace(/[（(][^）)]*[）)]$/, '');
+        const literalInName = !!TOOL_NAME_LITERAL[id]?.test(c.name) || !!TOOL_NAME_WHITELIST[base]?.includes(id);
+        const namedByText = found && !nameOnly && term.test(quote!);
+        if (!literalInName && !namedByText) { errors.push(`${c.name}: tool skill ${id} dropped (tool not literally in the course name or the source text)`); continue; }
+        evidence_type = '原文明确';
+      }
       if (evidence_type === '课名推断') {
         if (term) { droppedNameInferred++; errors.push(`${c.name}: tool skill ${id} dropped (课名推断 never yields a tool skill)`); continue; }
         if (picked.filter((x) => x.evidence_type === '课名推断').length >= MAX_NAME_INFERRED) { droppedNameInferred++; errors.push(`${c.name}: ${id} dropped (课名推断 max ${MAX_NAME_INFERRED})`); continue; }

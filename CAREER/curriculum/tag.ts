@@ -14,7 +14,7 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LlmSkillTagger, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight } from './skills.js';
+import { LlmSkillTagger, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, EVIDENCE_WEIGHT, rankFactor, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
 import { CURRICULUM_RAW } from './fetch.js';
 import type { DocFormat } from './manifest.js';
 import { extractText } from './text.js';
@@ -54,9 +54,32 @@ export const skillTableHash = (skills: SkillRef[]) =>
 /** per-course tagging key: model + course name + the course's own source lines + prompt/rules version + skill table */
 export const courseTagKey = (model: string, name: string, ownEvidence: string, skillsHash: string, rulesVersion = TAG_RULES_VERSION) => sha(model, name, ownEvidence, rulesVersion, skillsHash);
 
+/**
+ * Post-step (no LLM): recompute the derived evidence_type (核心课名 vs 课名推断) and weight of every stored course_skill row.
+ * Only these two columns change; skill, quote, review state, tagged_at are never touched. Applies to reviewed rows too.
+ * Rank factor is recovered from the stored weight / current type weight. Idempotent: a second call updates 0 rows.
+ */
+export function classifyCoreNames(db: Database.Database): { checked: number; updated: number; core_name: number } {
+  const rows = db.prepare(`SELECT cs.rowid AS rid, cs.weight, cs.evidence_type, c.name AS course, s.name AS skill,
+      EXISTS (SELECT 1 FROM major_course mc WHERE mc.course_id = cs.course_id AND mc.is_core = 1) AS core
+    FROM course_skill cs JOIN course c ON c.id = cs.course_id JOIN skill s ON s.id = cs.skill_id WHERE cs.evidence_type IS NOT NULL`).all() as
+    { rid: number; weight: number | null; evidence_type: StoredEvidenceType; course: string; skill: string; core: number }[];
+  const upd = db.prepare('UPDATE course_skill SET evidence_type = ?, weight = ? WHERE rowid = ?');
+  let updated = 0, coreName = 0;
+  for (const r of rows) {
+    const t = storedEvidenceType(r.evidence_type, r.core === 1, r.course, r.skill);
+    if (t === '核心课名') coreName++;
+    const rank = r.weight == null ? 1 : r.weight / EVIDENCE_WEIGHT[r.evidence_type];
+    const w = Number((EVIDENCE_WEIGHT[t] * rank).toFixed(3));
+    if (t !== r.evidence_type || w !== r.weight) { upd.run(t, w, r.rid); updated++; }
+  }
+  return { checked: rows.length, updated, core_name: coreName };
+}
+export { CORE_NAME_VERSION };
+
 interface CourseResult { tags: SkillTag[]; untagged: { is_core: boolean; reason: string } | null }
 
-export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number }
+export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name: { checked: number; updated: number; core_name: number } }
 
 /**
  * Stability contract (expert, 2026-10-13):
@@ -82,7 +105,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     const seen = new Set<string>();
     // a course shared by several majors of one school is tagged once (first occurrence)
     for (const r of rows) { if (seen.has(r.course_id)) continue; seen.add(r.course_id); groups.set(`${r.school_id}|${r.major_code}`, [...(groups.get(`${r.school_id}|${r.major_code}`) ?? []), r]); }
-    const sum: TagRunSummary = { tagger: t.name, mock, groups: groups.size, courses: 0, retagged: 0, reused: 0, tags: 0, untagged: [], prompt_tokens: 0, completion_tokens: 0, llm_calls: 0, cached: 0, errors: [], needs_review: 0, rows_inserted: 0, rows_updated: 0, rows_deleted: 0 };
+    const sum: TagRunSummary = { tagger: t.name, mock, groups: groups.size, courses: 0, retagged: 0, reused: 0, tags: 0, untagged: [], prompt_tokens: 0, completion_tokens: 0, llm_calls: 0, cached: 0, errors: [], needs_review: 0, rows_inserted: 0, rows_updated: 0, rows_deleted: 0, core_name: { checked: 0, updated: 0, core_name: 0 } };
     const now = new Date().toISOString();
     const getCache = db.prepare('SELECT tag_key, result_json FROM course_skill_tag_cache WHERE course_id = ?');
     const results = new Map<string, { c: (typeof rows)[number]; key: string; res: CourseResult; fresh: boolean; model: string }>();
@@ -112,6 +135,8 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
       }
     }
     const runId = `tag:${now}`;
+    const skillName = new Map(skills.map((x) => [x.id, x.name]));
+    const coreCourse = new Set((db.prepare('SELECT DISTINCT course_id FROM major_course WHERE is_core = 1').all() as { course_id: string }[]).map((r) => r.course_id));
     const write = db.transaction(() => {
       if (mock) return; // mock output is never written
       const existing = db.prepare('SELECT rowid AS rid, * FROM course_skill WHERE course_id = ?');
@@ -137,7 +162,8 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         res.tags.forEach((x, i) => {
           if (locked.has(x.skill_id)) return;
           want.add(x.skill_id);
-          const vals = [tagWeight(x.evidence_type, i), x.rationale, t.name, tagModel, x.evidence_quote, x.needs_review ? 1 : 0, x.review_reason, x.evidence_type] as const;
+          const st = storedEvidenceType(x.evidence_type, coreCourse.has(c.course_id), c.name, skillName.get(x.skill_id) ?? '');
+          const vals = [tagWeight(st, i), x.rationale, t.name, tagModel, x.evidence_quote, x.needs_review ? 1 : 0, x.review_reason, st] as const;
           const old = mine.get(x.skill_id);
           if (!old) { ins.run(c.course_id, x.skill_id, vals[0], vals[1], vals[2], vals[3], now, vals[4], vals[5], vals[6], vals[7]); sum.rows_inserted++; return; }
           const same = old.weight === vals[0] && old.rationale === vals[1] && old.source === vals[2] && old.evidence_quote === vals[4] && old.needs_review === vals[5] && old.review_reason === vals[6] && old.evidence_type === vals[7];
@@ -153,6 +179,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         .run(runId, t.name, `${TAG_RULES_VERSION}/${sHash.slice(0, 12)}`, now, new Date().toISOString(), sum.retagged);
     });
     write();
+    sum.core_name = db.transaction(() => classifyCoreNames(db))();
     for (const { c, res } of results.values()) {
       sum.courses++;
       sum.tags += res.tags.length;
@@ -168,7 +195,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
 export async function main() {
   const s = await tagSkills();
   const coreUn = s.untagged.filter((u) => u.is_core);
-  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}`);
+  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}; 核心课名 post-step v${CORE_NAME_VERSION}: ${s.core_name.core_name} 核心课名, ${s.core_name.updated} rows re-typed`);
   for (const u of s.untagged) console.log(`[career]   untagged${u.is_core ? ' [核心课]' : ''}: ${u.name} — ${u.reason}`);
   for (const e of s.errors) console.warn(`[career]   ${e}`);
 }

@@ -7,7 +7,7 @@ interface Item {
   review_status: string; reviewer: string | null; reviewed_at: string | null; review_note: string | null;
   tags: Tag[]; untagged_reason: string | null;
 }
-interface Tag { skill_id: string; skill: string; skill_type: string; evidence_quote: string | null; rationale: string | null; needs_review: number; review_reason: string | null; evidence_type: '原文明确' | '课名推断' | null; weight: number | null }
+interface Tag { skill_id: string; skill: string; skill_type: string; evidence_quote: string | null; rationale: string | null; needs_review: number; review_reason: string | null; evidence_type: '原文明确' | '核心课名' | '课名推断' | null; weight: number | null }
 /** expert rule (009): 核心课 only from the 正文 核心课程 section; table-only 专业核心 block = 专业必修 */
 const coreLabel = (it: Item) => (it.is_core === 1 ? '核心课' : it.table_block && /专业核心/.test(it.table_block) ? '专业必修' : null);
 
@@ -66,7 +66,7 @@ export function ReviewPage({ sel }: { sel?: string }) {
       <p className="muted small">LLM 抽取结果（extraction_method=llm, reviewed=0）。逐条对照原文片段与 PDF 页码：通过 / 驳回 / 修改。Mock 结果不会入库，这里只会出现真实模型的抽取。</p>
       <label>审核人 <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="姓名" /></label>
       {' '}<label><input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} /> 只看标签待复核（needs_review）</label>
-      {' '}<label>依据类型 <select value={evType} onChange={(e) => setEvType(e.target.value)}><option value="">全部</option><option value="原文明确">原文明确</option><option value="课名推断">课名推断</option></select></label>
+      {' '}<label>依据类型 <select value={evType} onChange={(e) => setEvType(e.target.value)}><option value="">全部</option><option value="原文明确">原文明确</option><option value="核心课名">核心课名</option><option value="课名推断">课名推断</option></select></label>
       {err && <div className="error">{err}</div>}
       <div className="review-layout" style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         <aside style={{ minWidth: 260 }}>

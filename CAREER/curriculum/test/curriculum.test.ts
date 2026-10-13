@@ -321,7 +321,7 @@ test('evidence-based tagging: verbatim quote checked, hedges flagged, tool skill
 
 test('evidence_type: name-only quote -> 课名推断 (max 2, knowledge skills only); weights documented', async () => {
   const { parseTagResponse, quoteIsNameOnly, EVIDENCE_WEIGHT, tagWeight } = await import('../skills.js');
-  assert.deepEqual(EVIDENCE_WEIGHT, { '原文明确': 1.0, '课名推断': 0.5 });
+  assert.equal(EVIDENCE_WEIGHT['课名推断'], 0.5);
   assert.equal(tagWeight('课名推断', 0), 0.5);
   assert.equal(quoteIsNameOnly('sd02130 | 信息安全导论 | 3 | 48 | 考试 | 5', '信息安全导论'), true);
   assert.equal(quoteIsNameOnly('信息安全导论：讲授对称密码与公钥密码', '信息安全导论'), false);
@@ -388,4 +388,58 @@ test('tagging stability: per-course cache, re-run is a no-op, reviewed rows surv
   assert.equal(JSON.stringify(d2.prepare("SELECT rowid, * FROM course_skill WHERE course_id = 's:操作系统'").get()), before, 'reviewed row untouched');
   assert.match((d2.prepare("SELECT rationale FROM course_skill WHERE course_id = 's:密码学'").get() as { rationale: string }).rationale, /run 2/, 'unreviewed row updated in place');
   d2.close();
+});
+
+test('核心课名: deterministic, conservative; tools only when literally named (数据库系统 whitelisted)', async () => {
+  const { coreNameMatches, storedEvidenceType, parseTagResponse, EVIDENCE_WEIGHT } = await import('../skills.js');
+  assert.deepEqual(EVIDENCE_WEIGHT, { '原文明确': 1.0, '核心课名': 0.8, '课名推断': 0.5 });
+  for (const [c, s] of [['操作系统', '操作系统原理'], ['编译原理', '编译原理'], ['数据结构与算法', '数据结构与算法'], ['软件工程', '软件工程方法'], ['离散数学', '离散数学'], ['计算机网络', '计算机网络协议'], ['计算机组成与系统结构', '计算机组成与体系结构'], ['机器学习（双语）', '机器学习']])
+    assert.equal(coreNameMatches(c!, s!), true, `${c}->${s}`);
+  for (const [c, s] of [['算法设计与分析', '数据结构与算法'], ['计算机系统导论', '操作系统原理'], ['人工智能引论', '机器学习'], ['操作系统', '计算机组成与体系结构'], ['高级算法设计与分析', '数据结构与算法']])
+    assert.equal(coreNameMatches(c!, s!), false, `${c}->${s}`);
+  assert.equal(storedEvidenceType('课名推断', true, '操作系统', '操作系统原理'), '核心课名');
+  assert.equal(storedEvidenceType('课名推断', false, '操作系统', '操作系统原理'), '课名推断');
+  assert.equal(storedEvidenceType('原文明确', true, '操作系统', '操作系统原理'), '原文明确');
+  const T = (id: string, name: string) => ({ id, name, domain_id: 'software', domain_name: 'd', skill_type: '工具与技术' });
+  const skills = [T('software.python', 'Python'), T('software.db-sql', '数据库与SQL'), T('software.linux', 'Linux使用')];
+  const source = 'a | Python程序设计 | 3\nb | 数据库原理 | 3\nc | 数据库系统 | 4\nd | 操作系统实验 | 2 课程在Linux环境下完成';
+  const courses = ['Python程序设计', '数据库原理', '数据库系统', '操作系统实验'].map((name, i) => ({ course_id: String(i), name, course_type: '必修', credits: 2, snippet: null, is_core: 0 }));
+  const resp = JSON.stringify({ courses: [
+    { course: 'Python程序设计', skills: [{ skill_id: 'software.python', evidence_type: '课名推断', quote: 'a | Python程序设计 | 3', rationale: '课名' }] },
+    { course: '数据库原理', skills: [{ skill_id: 'software.db-sql', evidence_type: '原文明确', quote: 'b | 数据库原理 | 3', rationale: '课名' }] },
+    { course: '数据库系统', skills: [{ skill_id: 'software.db-sql', evidence_type: '课名推断', quote: 'c | 数据库系统 | 4', rationale: '课名' }] },
+    { course: '操作系统实验', skills: [{ skill_id: 'software.linux', evidence_type: '原文明确', quote: '课程在Linux环境下完成', rationale: '原文' }] },
+  ] });
+  const p = parseTagResponse(resp, courses, skills, source);
+  const of = (c: string) => p.tags.find((t) => t.course_id === c)?.evidence_type;
+  assert.equal(of('0'), '原文明确');
+  assert.equal(of('1'), undefined, '数据库原理: tool not literally named -> dropped');
+  assert.equal(of('2'), '原文明确', 'whitelist');
+  assert.equal(of('3'), '原文明确');
+});
+
+test('核心课名 post-step: no LLM, idempotent, reviewed rows only get type/weight', async () => {
+  const { classifyCoreNames } = await import('../tag.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'corename.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES ('s:操作系统', 's', '操作系统', 'u', 'llm'), ('s:计算机系统导论', 's', '计算机系统导论', 'u', 'llm')").run();
+  db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, is_core) VALUES ('s', '080901', 's:操作系统', 'u', 'llm', 1), ('s', '080901', 's:计算机系统导论', 'u', 'llm', 1)").run();
+  db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, rationale, tagged_at, evidence_quote, evidence_type) VALUES
+    ('s:操作系统', 'software.os', 0.5, 'llm', 1, '专家确认', 't0', 'q', '课名推断'),
+    ('s:计算机系统导论', 'software.os', 0.375, 'llm', 0, 'r', 't0', 'q', '课名推断')`).run();
+  const r1 = classifyCoreNames(db);
+  assert.deepEqual(r1, { checked: 2, updated: 1, core_name: 1 });
+  const os = db.prepare("SELECT * FROM course_skill WHERE course_id = 's:操作系统'").get() as Record<string, unknown>;
+  assert.equal(os.evidence_type, '核心课名'); assert.equal(os.weight, 0.8);
+  assert.equal(os.reviewed, 1); assert.equal(os.rationale, '专家确认'); assert.equal(os.tagged_at, 't0');
+  const snap = JSON.stringify(db.prepare('SELECT rowid, * FROM course_skill').all());
+  assert.equal(classifyCoreNames(db).updated, 0);
+  assert.equal(JSON.stringify(db.prepare('SELECT rowid, * FROM course_skill').all()), snap, 'idempotent');
+  db.close();
+  // the function takes no tagger/provider: it cannot call an LLM
+  assert.equal(classifyCoreNames.length, 1);
 });
