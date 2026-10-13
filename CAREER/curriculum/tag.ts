@@ -65,9 +65,14 @@ export function classifyCoreNames(db: Database.Database): { checked: number; upd
     FROM course_skill cs JOIN course c ON c.id = cs.course_id JOIN skill s ON s.id = cs.skill_id WHERE cs.evidence_type IS NOT NULL`).all() as
     { rid: number; weight: number | null; evidence_type: StoredEvidenceType; course: string; skill: string; core: number }[];
   const upd = db.prepare('UPDATE course_skill SET evidence_type = ?, weight = ? WHERE rowid = ?');
+  // an expert alias of the skill in the course name counts as "the course name is the skill" (代数与几何 -> 线性代数)
+  const aliasOf = new Map<string, string[]>();
+  for (const a of db.prepare('SELECT a.alias, s.name FROM skill_alias a JOIN skill s ON s.id = a.skill_id').all() as { alias: string; name: string }[])
+    aliasOf.set(a.name, [...(aliasOf.get(a.name) ?? []), aliasNorm(a.alias)]);
   let updated = 0, coreName = 0;
   for (const r of rows) {
-    const t = storedEvidenceType(r.evidence_type, r.core === 1, r.course, r.skill);
+    const viaAlias = r.core === 1 && r.evidence_type !== '原文明确' && (aliasOf.get(r.skill) ?? []).some((a) => a.length >= 2 && aliasNorm(r.course).includes(a));
+    const t = viaAlias ? '核心课名' : storedEvidenceType(r.evidence_type, r.core === 1, r.course, r.skill);
     if (t === '核心课名') coreName++;
     const w = tagWeight(t);
     if (t !== r.evidence_type || w !== r.weight) { upd.run(t, w, r.rid); updated++; }
@@ -103,9 +108,52 @@ export function addCoreNameTags(db: Database.Database): { inserted: number; dele
   return { inserted, deleted };
 }
 
+/** course name normalized for alias matching: no whitespace, no trailing (…) qualifier, lower-case */
+export const aliasNorm = (s: string) => s.replace(/\s+/g, '').replace(/[（(][^）)]*[）)]$/, '').toLowerCase();
+
+/**
+ * Expert aliases (skill_alias) drive deterministic tags, no LLM (expert 2026-10-13): a course whose name equals or contains an alias
+ * gets the alias's skill. Same evidence rules as the tagger: 专业知识 -> 核心课名 0.8 on a 正文 core course, else 课名推断 0.5;
+ * 工具与技术 -> 原文明确 1.0 (the tool is literally in the course name). Never touches an existing row (LLM, reviewed or other rule)
+ * or an expert-rejected pair; unreviewed rule:alias rows whose alias is gone are deleted. Idempotent.
+ */
+export function applyAliasTags(db: Database.Database): { inserted: number; deleted: number; updated: number } {
+  const aliases = (db.prepare(`SELECT a.alias, a.skill_id, s.name AS skill, s.skill_type FROM skill_alias a JOIN skill s ON s.id = a.skill_id`).all() as { alias: string; skill_id: string; skill: string; skill_type: string }[])
+    .map((a) => ({ ...a, n: aliasNorm(a.alias) })).filter((a) => a.n.length >= 2);
+  const courses = db.prepare(`SELECT c.id, c.name, MAX(mc.is_core = 1) AS core FROM major_course mc JOIN course c ON c.id = mc.course_id
+    WHERE mc.review_status <> 'rejected' GROUP BY c.id`).all() as { id: string; name: string; core: number }[];
+  const rejected = new Set((db.prepare("SELECT course_id || '|' || skill_id AS k FROM course_skill_rejected").all() as { k: string }[]).map((r) => r.k));
+  const cur = db.prepare('SELECT rowid AS rid, source, reviewed, evidence_type FROM course_skill WHERE course_id = ? AND skill_id = ?');
+  const ins = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, confidence, reviewed, rationale, source, model, tagged_at, evidence_quote, needs_review, review_reason, evidence_type, tag_rank)
+    VALUES (?, ?, ?, 'pdf_parse', NULL, 0, ?, 'rule:alias', NULL, ?, ?, 0, NULL, ?, NULL) ON CONFLICT (course_id, skill_id) DO NOTHING`);
+  const upd = db.prepare('UPDATE course_skill SET weight = ?, evidence_type = ?, rationale = ? WHERE rowid = ?');
+  const want = new Set<string>();
+  let inserted = 0, updated = 0;
+  const now = new Date().toISOString();
+  for (const c of courses) {
+    const cn = aliasNorm(c.name);
+    for (const a of aliases) {
+      if (!cn.includes(a.n) || rejected.has(`${c.id}|${a.skill_id}`)) continue;
+      const k = `${c.id}|${a.skill_id}`;
+      if (want.has(k)) continue;
+      want.add(k);
+      const et: StoredEvidenceType = a.skill_type === '工具与技术' ? '原文明确' : c.core ? '核心课名' : '课名推断';
+      const why = `课程名${cn === a.n ? '即' : '含'}别名「${a.alias}」→ 技能「${a.skill}」（专家别名规则）`;
+      const old = cur.get(c.id, a.skill_id) as { rid: number; source: string; reviewed: number; evidence_type: string } | undefined;
+      if (!old) inserted += ins.run(c.id, a.skill_id, tagWeight(et), why, now, c.name, et).changes;
+      else if (old.source === 'rule:alias' && old.reviewed === 0 && old.evidence_type !== et) updated += upd.run(tagWeight(et), et, why, old.rid).changes;
+    }
+  }
+  let deleted = 0;
+  for (const r of db.prepare("SELECT rowid AS rid, course_id, skill_id FROM course_skill WHERE source = 'rule:alias' AND reviewed = 0").all() as { rid: number; course_id: string; skill_id: string }[])
+    if (!want.has(`${r.course_id}|${r.skill_id}`)) deleted += db.prepare('DELETE FROM course_skill WHERE rowid = ?').run(r.rid).changes;
+  if (inserted || deleted) db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
+  return { inserted, deleted, updated };
+}
+
 interface CourseResult { tags: SkillTag[]; untagged: { is_core: boolean; reason: string } | null }
 
-export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name_added?: { inserted: number; deleted: number }; core_name: { checked: number; updated: number; core_name: number } }
+export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name_added?: { inserted: number; deleted: number }; alias_added?: { inserted: number; deleted: number; updated: number }; core_name: { checked: number; updated: number; core_name: number } }
 
 /**
  * Stability contract (expert, 2026-10-13):
@@ -222,6 +270,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     write();
     if (!mock) sum.core_name_added = db.transaction(() => {
       const x = addCoreNameTags(db);
+      sum.alias_added = applyAliasTags(db);
       db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
       return x;
     })();
@@ -244,7 +293,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
 export async function main() {
   const s = await tagSkills();
   const coreUn = s.untagged.filter((u) => u.is_core);
-  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}; 核心课名 rule tags +${s.core_name_added?.inserted ?? 0} -${s.core_name_added?.deleted ?? 0}; 核心课名 post-step v${CORE_NAME_VERSION}: ${s.core_name.core_name} 核心课名, ${s.core_name.updated} rows re-typed`);
+  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}; 核心课名 rule tags +${s.core_name_added?.inserted ?? 0} -${s.core_name_added?.deleted ?? 0}; alias rule tags +${s.alias_added?.inserted ?? 0} -${s.alias_added?.deleted ?? 0}; 核心课名 post-step v${CORE_NAME_VERSION}: ${s.core_name.core_name} 核心课名, ${s.core_name.updated} rows re-typed`);
   for (const u of s.untagged) console.log(`[career]   untagged${u.is_core ? ' [核心课]' : ''}: ${u.name} — ${u.reason}`);
   for (const e of s.errors) console.warn(`[career]   ${e}`);
 }

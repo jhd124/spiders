@@ -5,7 +5,10 @@
  * Scoring per school x major:
  *   for each required skill s: best(s) = max course_skill.weight (原文明确 1.0 / 核心课名 0.8 / 课名推断 0.5) over the major's
  *   courses tagged with s, ignoring tags with needs_review = 1 (listed, flagged) and courses whose review was rejected.
- *   core_score = Σ_core 1.0 × best(s);  general_score = Σ_general 0.5 × best(s);  score = core_score + general_score (shown).
+ *   core_score = Σ_core 1.0 × best_required(s), where best_required only looks at courses whose course_type is 必修 or 限选
+ *     (NULL type = 任选, expert 2026-10-13). A core skill reached only through 任选 courses is listed as 可选修获得 (elective_only),
+ *     not scored and not "missing".
+ *   general_score = Σ_general 0.5 × best(s) (任选 courses included);  score = core_score + general_score (shown).
  *   Ranked by core_score (expert 2026-10-13: core coverage decides), general_score only as tie-break, then coverage,
  *   then the number of skills whose best evidence is a 核心课.  coverage = covered skills / required skills.
  *   Ties between courses with the same weight prefer a 核心课 (is_core = 1) as the shown "best course".
@@ -65,10 +68,10 @@ export function listOccupations(db: Database.Database): OccupationListItem[] {
 }
 
 export interface CourseEvidence { course_id: string; course: string; is_core: boolean; course_type: string | null; evidence_type: string | null; weight: number; quote: string | null; needs_review: boolean; review_reason: string | null }
-export interface SkillMatch { skill_id: string; skill: string; importance: Importance; best: number; covered: boolean; best_course: string | null; courses: CourseEvidence[] }
+export interface SkillMatch { skill_id: string; skill: string; importance: Importance; best: number; best_required: number; covered: boolean; elective_only: boolean; best_course: string | null; courses: CourseEvidence[] }
 export interface MajorMatch {
   school_id: string; school: string; major_code: string; major: string | null;
-  score: number; core_score: number; general_score: number; max_score: number; score_pct: number; coverage_pct: number; covered: string[]; missing: string[]; flagged: number; skills: SkillMatch[];
+  score: number; core_score: number; general_score: number; max_score: number; score_pct: number; coverage_pct: number; covered: string[]; elective_only: string[]; missing: string[]; flagged: number; skills: SkillMatch[];
 }
 export interface OccupationMatch {
   occupation: { code: string; name: string }; example_data: boolean; unverified: number;
@@ -105,15 +108,21 @@ export function matchOccupation(db: Database.Database, code: string): Occupation
         weight: e.weight ?? EVIDENCE_WEIGHT[e.evidence_type ?? ''] ?? 0, quote: e.quote, needs_review: e.needs_review === 1, review_reason: e.review_reason,
       })).sort((a, b) => Number(a.needs_review) - Number(b.needs_review) || b.weight - a.weight || Number(b.is_core) - Number(a.is_core) || a.course.localeCompare(b.course));
       flagged += courses.filter((c) => c.needs_review).length;
-      const top = courses.find((c) => !c.needs_review);
-      const best = top?.weight ?? 0;
-      if (s.importance === 'core') core += IMPORTANCE_WEIGHT.core * best; else gen += IMPORTANCE_WEIGHT.general * best;
+      const ok = courses.filter((c) => !c.needs_review);
+      const req = ok.filter((c) => c.course_type === '必修' || c.course_type === '限选');
+      const best = ok[0]?.weight ?? 0, bestReq = req[0]?.weight ?? 0;
+      const isCore = s.importance === 'core';
+      const top = isCore ? req[0] : ok[0];
+      if (isCore) core += IMPORTANCE_WEIGHT.core * bestReq; else gen += IMPORTANCE_WEIGHT.general * best;
       if (top?.is_core) coreBest++;
-      return { skill_id: s.skill_id, skill: s.skill, importance: s.importance, best, covered: best > 0, best_course: top?.course ?? null, courses };
+      const covered = isCore ? bestReq > 0 : best > 0;
+      return { skill_id: s.skill_id, skill: s.skill, importance: s.importance, best, best_required: bestReq, covered, elective_only: isCore && !covered && best > 0,
+        best_course: top?.course ?? null, courses };
     });
     const covered = sm.filter((s) => s.covered).map((s) => s.skill);
     return { ...m, score: r3(core + gen), core_score: r3(core), general_score: r3(gen), max_score: maxScore, score_pct: r3((core + gen) / maxScore), coverage_pct: r3(covered.length / skills.length), covered,
-      missing: sm.filter((s) => !s.covered).map((s) => s.skill), flagged, skills: sm, coreBest };
+      elective_only: sm.filter((s) => s.elective_only).map((s) => s.skill),
+      missing: sm.filter((s) => !s.covered && !s.elective_only).map((s) => s.skill), flagged, skills: sm, coreBest };
   });
   out.sort((a, b) => b.core_score - a.core_score || b.general_score - a.general_score || b.coverage_pct - a.coverage_pct || b.coreBest - a.coreBest || a.school.localeCompare(b.school) || a.major_code.localeCompare(b.major_code));
   return { ...base, majors: out.map(({ coreBest: _c, ...m }) => m) };

@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { Hono } from 'hono';
 import { CAREER_DB } from '../../CAREER/db.js';
 import { listOccupations, loadOccupationSkills, matchOccupation } from '../../CAREER/match.js';
+import { addAlias, applyAliasRules, deleteAlias, exportAliasesCsv, listAliases, loadSkillAliases } from '../../CAREER/aliases.js';
 import { HttpError } from './runs.js';
 
 const withDb = <T>(f: (db: Database.Database) => T): T => {
@@ -21,7 +22,12 @@ const withDb = <T>(f: (db: Database.Database) => T): T => {
 /** Called after the CAREER migrations at server start; failures are logged, never block startup. */
 export function syncOccupationSkills() {
   try {
-    if (existsSync(CAREER_DB)) withDb((db) => db.transaction(() => loadOccupationSkills(db))());
+    if (existsSync(CAREER_DB)) withDb((db) => db.transaction(() => {
+      loadSkillAliases(db);
+      const a = applyAliasRules(db);
+      console.log(`[career] deterministic rules at start: course_type filled ${a.types}; alias tags +${a.tags.inserted} -${a.tags.deleted} ~${a.tags.updated}; 核心课名 re-typed ${a.core_name_retyped}`);
+      loadOccupationSkills(db);
+    })());
   } catch (err) {
     console.error('[career] occupation skills load failed:', err);
   }
@@ -33,4 +39,26 @@ match.get('/occupation/:code', (c) => {
   const r = withDb((db) => matchOccupation(db, c.req.param('code')));
   if (!r) throw new HttpError(404, `no occupation ${c.req.param('code')}`);
   return c.json(r);
+});
+
+/* ---------- skill aliases (expert-maintained; #/aliases) ---------- */
+export const aliases = new Hono();
+const fail = (e: unknown): never => { throw new HttpError(400, (e as Error).message); };
+aliases.get('/', (c) => c.json(withDb((db) => ({
+  aliases: listAliases(db),
+  skills: db.prepare('SELECT id, name, skill_type FROM skill ORDER BY primary_domain_id, name').all(),
+}))));
+aliases.post('/', async (c) => {
+  const b = (await c.req.json().catch(() => ({}))) as { alias?: string; skill?: string; by?: string };
+  if (!b.alias?.trim() || !b.skill || !b.by?.trim()) throw new HttpError(400, 'alias, skill and by are required');
+  return c.json(withDb((db) => { try { return addAlias(db, b.alias!, b.skill!, b.by!.trim()); } catch (e) { return fail(e); } }), 201);
+});
+aliases.delete('/:alias', (c) => {
+  const by = c.req.query('by')?.trim();
+  if (!by) throw new HttpError(400, 'by is required');
+  return c.json(withDb((db) => { try { return deleteAlias(db, decodeURIComponent(c.req.param('alias')), by); } catch (e) { return fail(e); } }));
+});
+aliases.get('/export.csv', (c) => {
+  c.header('Content-Disposition', 'attachment; filename="skill_aliases.csv"');
+  return c.body(withDb((db) => exportAliasesCsv(db)), 200, { 'Content-Type': 'text/csv; charset=utf-8' });
 });

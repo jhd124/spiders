@@ -80,3 +80,64 @@ test('the shipped expert seed: every skill name and occupation resolves', () => 
   assert.equal((db.prepare(`SELECT count(*) n FROM occupation_skill WHERE extraction_method = 'expert' AND verified_by = '国内教育行业专家' AND reviewed = 1`).get() as { n: number }).n, 81);
   db.close();
 });
+
+test('core score counts only 必修/限选 courses; a core skill reached only by 任选 (or NULL type) is 可选修获得', () => {
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  db.prepare(`DELETE FROM occupation_skill`).run();
+  db.prepare(`INSERT INTO occupation_skill (occupation_code, skill_id, importance, source, extraction_method, reviewed) VALUES
+    ('2-02-38-01', 'ai.ml', 'core', 'expert', 'expert', 1), ('2-02-38-01', 'ai.nlp', 'general', 'expert', 'expert', 1)`).run();
+  const add = (id: string, name: string, type: string | null, skill: string) => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'c', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('c', '080902', ?, 'u', 'llm', ?, 0)").run(id, type);
+    db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, evidence_type) VALUES (?, ?, 1, 'llm', 0, '原文明确')").run(id, skill);
+  };
+  db.prepare(`INSERT INTO school (id, name, source) VALUES ('c', '丙大学', 't')`).run();
+  add('c:ml', '机器学习（选修）', '任选', 'ai.ml');
+  add('c:nlp', '自然语言处理', null, 'ai.nlp');
+  const m = matchOccupation(db, '2-02-38-01')!.majors.find((x) => x.school_id === 'c')!;
+  assert.equal(m.core_score, 0);
+  assert.equal(m.general_score, 0.5, 'general skills still count 任选 / NULL-type courses');
+  assert.deepEqual(m.elective_only, ['机器学习']);
+  assert.deepEqual(m.missing, []);
+  assert.equal(m.coverage_pct, 0.5);
+  db.close();
+});
+
+test('expert aliases tag courses deterministically; admin delete is tombstoned; implied course_type backfill', async () => {
+  const { loadSkillAliases, addAlias, deleteAlias, exportAliasesCsv, ALIAS_CSV } = await import('../../aliases.js');
+  const { backfillImpliedTypes } = await import('../load.js');
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  const course = (id: string, name: string, core: number, block: string | null = null, type: string | null = '必修') => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'h', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, table_block) VALUES ('h', '080717T', ?, 'u', 'llm', ?, ?, ?)").run(id, type, core, block);
+  };
+  course('h:dg', '代数与几何', 1);
+  course('h:la', '线性代数与解析几何（Ⅰ）', 0);
+  course('h:sg', '集合论与图论', 0);
+  course('h:en', '学术英语写作', 0, '大学英语课题组', null);
+  db.prepare("INSERT INTO course_skill_rejected (course_id, skill_id, reason, rejected_by, rejected_at) VALUES ('h:sg', 'foundation.discrete-math', 'x', 'e', 'now')").run();
+  const r = loadSkillAliases(db, ALIAS_CSV, () => {});
+  assert.deepEqual(r.bad, []);
+  const { applyAliasRules } = await import('../../aliases.js');
+  const a = applyAliasRules(db);
+  assert.equal(a.types, 1);
+  assert.equal(backfillImpliedTypes(db), 0, 'idempotent');
+  assert.equal((db.prepare("SELECT course_type FROM major_course WHERE course_id = 'h:en'").get() as { course_type: string }).course_type, '限选');
+  const tag = (c: string) => db.prepare("SELECT skill_id, evidence_type, weight, source FROM course_skill WHERE course_id = ? ORDER BY skill_id").all(c);
+  assert.deepEqual(tag('h:dg'), [{ skill_id: 'foundation.linear-algebra', evidence_type: '核心课名', weight: 0.8, source: 'rule:alias' }]);
+  assert.deepEqual(tag('h:la'), [{ skill_id: 'foundation.linear-algebra', evidence_type: '课名推断', weight: 0.5, source: 'rule:alias' }]);
+  assert.deepEqual(tag('h:sg'), [], 'expert-rejected pair never added');
+  assert.equal(applyAliasRules(db).tags.inserted, 0, 'idempotent');
+
+  deleteAlias(db, '代数与几何', 'expert');
+  assert.deepEqual(tag('h:dg'), []);
+  loadSkillAliases(db, ALIAS_CSV, () => {});
+  assert.equal(db.prepare("SELECT 1 FROM skill_alias WHERE alias = '代数与几何'").get(), undefined, 'tombstoned: seed does not re-add');
+  addAlias(db, '代数与几何', '线性代数', 'expert');
+  assert.equal(tag('h:dg').length, 1);
+  assert.throws(() => addAlias(db, '线性代数', '离散数学', 'e'), /already a skill name/);
+  assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note\n[\s\S]*代数与几何,线性代数,expert,added by expert/);
+  db.close();
+});

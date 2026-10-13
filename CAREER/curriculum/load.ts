@@ -13,7 +13,7 @@ import { cleanPath, rawPath } from '../../lib/io.js';
 import { isMultiMajor, majorCodes, readManifest } from './manifest.js';
 import { RAW_NAME, type RawCurriculum } from './crawler.js';
 import type { CleanCurriculum } from './clean.js';
-import { normCourseName } from './extract.js';
+import { impliedType, normCourseName, typeFromBlock } from './extract.js';
 
 /** Expert rule (009): core ONLY when listed in the 正文 核心课程 section. A course that is only in the table's 专业核心课程
  *  block is 专业必修 (is_core 0); table_block stays as the source fact. Applies to every school. */
@@ -119,8 +119,8 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       const courseId = `${s.schoolId}:${normCourseName(c.name)}`;
       upCourse.run({ id: courseId, school_id: s.schoolId, name: c.name, credits: c.credits, hours: c.hours, block: c.block, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence, model: r.model, source_doc_id: s.docId });
       upMc.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, plan_year: s.year, semester: c.semester, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence,
-        course_type: c.course_type, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), credits: c.credits, hours: c.hours, curriculum_source_id: r.source_id, source_doc_id: s.docId, source_page: c.page, snippet: c.snippet, model: r.model });
-      repaired += upFacts.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), course_type: c.course_type, credits: c.credits, hours: c.hours }).changes;
+        course_type: typeFromBlock(c.block, c.course_type), core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), credits: c.credits, hours: c.hours, curriculum_source_id: r.source_id, source_doc_id: s.docId, source_page: c.page, snippet: c.snippet, model: r.model });
+      repaired += upFacts.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), course_type: typeFromBlock(c.block, c.course_type), credits: c.credits, hours: c.hours }).changes;
       loaded++;
     }
     // a pending row of this source/major that the latest extraction no longer produces is stale -> delete
@@ -129,6 +129,22 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       .run(r.source_id, r.major_code, JSON.stringify(ids)).changes;
     if (stale) console.log(`[career] curriculum: ${r.school} ${r.major_code}: removed ${stale} stale pending rows`);
   }
+  const typed = backfillImpliedTypes(db);
+  if (typed) console.log(`[career] curriculum: ${typed} null course_type filled from the table block (impliedType)`);
   // stage 2 (course -> skill tagging) runs after ingest: CAREER/post_ingest.ts -> curriculum/tag.ts
   console.log(`[career] curriculum: manifest ${synced} sources, upserted ${loaded} major_course rows${repaired ? `, refreshed source facts (core/block/type) on ${repaired} reviewed rows` : ''}${skippedMock ? `, skipped ${skippedMock} MOCK courses (not ingested)` : ''}, skill tagging runs next (post_ingest)`);
+}
+
+/** Deterministic course_type default on stored rows (no re-extraction needed, works on results extracted before the rule existed,
+ *  e.g. SDU 080902's 大学英语课题组 rows): course_type NULL + a table_block -> typeFromBlock/impliedType. Reviewer edits are kept
+ *  (only NULL is filled). Returns the number of rows filled. */
+export function backfillImpliedTypes(db: Database.Database): number {
+  const rows = db.prepare('SELECT rowid AS rid, table_block FROM major_course WHERE course_type IS NULL AND table_block IS NOT NULL').all() as { rid: number; table_block: string }[];
+  const upd = db.prepare('UPDATE major_course SET course_type = ? WHERE rowid = ? AND course_type IS NULL');
+  let n = 0;
+  for (const r of rows) {
+    const t = typeFromBlock(r.table_block, null) ?? impliedType(r.table_block);
+    if (t) n += upd.run(t, r.rid).changes;
+  }
+  return n;
 }
