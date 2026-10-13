@@ -14,5 +14,5 @@ if (args.includes('--load')) db.transaction(() => loadOccupationSkills(db))();
 const r = matchOccupation(db, code);
 if (!r) { console.error(`no occupation ${code}`); process.exit(1); }
 console.log(`${r.occupation.code} ${r.occupation.name}  skills=${r.skills.length}  example=${r.example_data}  unverified=${r.unverified}`);
-r.majors.forEach((m, i) => console.log(`${String(i + 1).padStart(2)}. ${m.school} ${m.major_code} ${m.major ?? ''}  core=${m.core_score} general=${m.general_score} coverage=${Math.round(m.coverage_pct * 100)}% flagged=${m.flagged}  可选修获得: ${m.elective_only.join('、') || '-'}  missing: ${m.missing.join('、') || '-'}`));
+r.majors.forEach((m, i) => console.log(`${String(i + 1).padStart(2)}. ${m.school} ${m.major_code} ${m.major ?? ''}  ${m.core_label}  ${m.general_label}  (tiebreak 加权 core=${m.core_score} general=${m.general_score}) flagged=${m.flagged}  可选修获得: ${m.elective_only.join('、') || '-'}  missing: ${m.missing.join('、') || '-'}`));
 db.close();

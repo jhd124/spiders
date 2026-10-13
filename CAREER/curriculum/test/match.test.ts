@@ -58,6 +58,10 @@ test('occupation skills load by NAME, unmatched names are reported, ranking = co
   assert.deepEqual([ai!.core_score, ai!.general_score, ai!.coverage_pct], [1.8, 0, 0.5]);
   assert.deepEqual([cs!.core_score, cs!.general_score], [0.5, 0.5]);
   assert.deepEqual([b!.core_score, b!.general_score, b!.flagged], [0, 0.5, 1], 'needs_review tag not scored');
+  assert.deepEqual([ai!.core_covered, ai!.core_total, ai!.core_coverage, ai!.general_coverage], [2, 2, 1, 0]);
+  assert.deepEqual([cs!.core_covered, cs!.general_covered, cs!.general_total], [1, 1, 2]);
+  assert.equal(cs!.core_label, '核心覆盖 1/2 (50%)'); assert.equal(cs!.general_label, '一般覆盖 1/2 (50%)');
+  assert.deepEqual([b!.core_covered, b!.general_covered], [0, 1]);
   const ml = b!.skills.find((s) => s.skill_id === 'ai.ml')!;
   assert.equal(ml.covered, false); assert.equal(ml.courses[0]!.needs_review, true);
   assert.equal(listOccupations(db)[0]!.verified, 4);
@@ -97,10 +101,20 @@ test('core score counts only 必修/限选 courses; a core skill reached only by
   add('c:nlp', '自然语言处理', null, 'ai.nlp');
   const m = matchOccupation(db, '2-02-38-01')!.majors.find((x) => x.school_id === 'c')!;
   assert.equal(m.core_score, 0);
+  assert.deepEqual([m.core_covered, m.core_total, m.general_covered, m.general_total], [0, 1, 1, 1], '任选 counts for general coverage only');
   assert.equal(m.general_score, 0.5, 'general skills still count 任选 / NULL-type courses');
   assert.deepEqual(m.elective_only, ['机器学习']);
   assert.deepEqual(m.missing, []);
   assert.equal(m.coverage_pct, 0.5);
+  // coverage counting: a 必修 课名推断 (0.5) tag covers the core skill as fully as 原文明确 and ranks above c
+  db.prepare(`INSERT INTO school (id, name, source) VALUES ('d', '丁大学', 't')`).run();
+  db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES ('d:ml', 'd', '机器学习导论', 'u', 'llm')").run();
+  db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('d', '080902', 'd:ml', 'u', 'llm', '必修', 0)").run();
+  db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, evidence_type) VALUES ('d:ml', 'ai.ml', 0.5, 'llm', 0, '课名推断')").run();
+  const all = matchOccupation(db, '2-02-38-01')!.majors;
+  const d = all.find((x) => x.school_id === 'd')!;
+  assert.equal(d.core_label, '核心覆盖 1/1 (100%)');
+  assert.ok(all.indexOf(d) < all.findIndex((x) => x.school_id === 'c'));
   db.close();
 });
 

@@ -32,7 +32,7 @@ export function MatchPage({ code }: { code?: string }) {
             {occs.map((o) => <option key={o.code} value={o.code}>{o.code} {o.name}（{o.skills} 项技能{o.example ? '，示例' : ''}）</option>)}
           </select>
           <span className="spacer" />
-          <span className="muted small">排序：先按核心技能得分 Σ 1.0 × 该专业必修/限选课程对该技能的最高依据权重(原文明确1.0/核心课名0.8/课名推断0.5)，一般技能(0.5，含任选课)仅作并列时的次序；核心技能仅由任选课覆盖的列为“可选修获得”，不计核心分；待复核标签不计分</span>
+          <span className="muted small">排序：先按核心覆盖率（核心技能中至少有一门必修/限选课挂上非待复核标签的比例，不论证据档次），再按一般覆盖率（含任选课）；证据权重加权分（原文明确1.0/核心课名0.8/课名推断0.5）只用于同分时排先后；核心技能仅由任选课覆盖的列为“可选修获得”，不计核心覆盖；待复核标签不计</span>
         </div>
         {err && <div className="pad"><div className="error">{err}</div></div>}
         {!occs.length && !err && <p className="pad muted">还没有职业技能映射：在 CAREER/seeds/occupation_skills.csv 中填写后重启服务或运行 career:ingest。</p>}
@@ -52,7 +52,7 @@ export function MatchPage({ code }: { code?: string }) {
       {data && (
         <div className="card">
           <table className="table">
-            <thead><tr><th>#</th><th>学校</th><th>专业</th><th>核心得分</th><th>一般得分</th><th>覆盖</th><th>已覆盖技能</th><th>可选修获得</th><th>缺失技能</th><th>待复核</th></tr></thead>
+            <thead><tr><th>#</th><th>学校</th><th>专业</th><th>核心覆盖</th><th>一般覆盖</th><th>加权分(并列用)</th><th>覆盖</th><th>已覆盖技能</th><th>可选修获得</th><th>缺失技能</th><th>待复核</th></tr></thead>
             <tbody>
               {data.majors.map((m, i) => {
                 const key = `${m.school_id}|${m.major_code}`;
@@ -60,14 +60,15 @@ export function MatchPage({ code }: { code?: string }) {
                   <Fragment key={key}>
                     <tr className={`clickable${open === key ? ' selected' : ''}`} onClick={() => setOpen(open === key ? null : key)}>
                       <td>{i + 1}</td><td>{m.school}</td><td>{m.major_code} {m.major ?? ''}</td>
-                      <td className="strong">{m.core_score}</td><td>{m.general_score}</td>
+                      <td className="strong">{m.core_covered}/{m.core_total} ({pct(m.core_coverage)})</td><td>{m.general_covered}/{m.general_total} ({pct(m.general_coverage)})</td>
+                      <td className="small muted">{m.core_score} / {m.general_score}</td>
                       <td>{pct(m.coverage_pct)}</td>
                       <td className="small">{m.covered.join('、') || '—'}</td>
                       <td className="small" style={{ color: '#8a6100' }}>{m.elective_only.join('、') || '—'}</td>
                       <td className="small err">{m.missing.join('、') || '—'}</td>
                       <td>{m.flagged || ''}</td>
                     </tr>
-                    {open === key && <tr><td colSpan={10}><Detail m={m} /></td></tr>}
+                    {open === key && <tr><td colSpan={11}><Detail m={m} /></td></tr>}
                   </Fragment>
                 );
               })}

@@ -5,6 +5,10 @@
  * Scoring per school x major:
  *   for each required skill s: best(s) = max course_skill.weight (原文明确 1.0 / 核心课名 0.8 / 课名推断 0.5) over the major's
  *   courses tagged with s, ignoring tags with needs_review = 1 (listed, flagged) and courses whose review was rejected.
+ * Ranking (expert 2026-10-14, coverage counting): core_coverage = core skills covered by ≥1 必修/限选 course with a non-needs_review
+ *   tag (any evidence tier) / core skills; general_coverage = same over general skills, 任选 courses included. Evidence weights no
+ *   longer score; the weighted sums below are kept only as tie-breaks (core_coverage, general_coverage, core_score, general_score).
+ * Legacy weighted sums (tie-break only):
  *   core_score = Σ_core 1.0 × best_required(s), where best_required only looks at courses whose course_type is 必修 or 限选
  *     (NULL type = 任选, expert 2026-10-13). A core skill reached only through 任选 courses is listed as 可选修获得 (elective_only),
  *     not scored and not "missing".
@@ -71,6 +75,8 @@ export interface CourseEvidence { course_id: string; course: string; is_core: bo
 export interface SkillMatch { skill_id: string; skill: string; importance: Importance; best: number; best_required: number; covered: boolean; elective_only: boolean; best_course: string | null; courses: CourseEvidence[] }
 export interface MajorMatch {
   school_id: string; school: string; major_code: string; major: string | null;
+  core_covered: number; core_total: number; core_coverage: number; general_covered: number; general_total: number; general_coverage: number;
+  core_label: string; general_label: string;
   score: number; core_score: number; general_score: number; max_score: number; score_pct: number; coverage_pct: number; covered: string[]; elective_only: string[]; missing: string[]; flagged: number; skills: SkillMatch[];
 }
 export interface OccupationMatch {
@@ -81,6 +87,7 @@ export interface OccupationMatch {
 }
 
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
+export const coverageLabel = (label: string, n: number, total: number) => `${label} ${n}/${total} (${total ? Math.round((n / total) * 100) : 0}%)`;
 
 export function matchOccupation(db: Database.Database, code: string): OccupationMatch | null {
   const occ = db.prepare('SELECT code, name FROM occupation WHERE code = ?').get(code) as { code: string; name: string } | undefined;
@@ -120,10 +127,14 @@ export function matchOccupation(db: Database.Database, code: string): Occupation
         best_course: top?.course ?? null, courses };
     });
     const covered = sm.filter((s) => s.covered).map((s) => s.skill);
-    return { ...m, score: r3(core + gen), core_score: r3(core), general_score: r3(gen), max_score: maxScore, score_pct: r3((core + gen) / maxScore), coverage_pct: r3(covered.length / skills.length), covered,
+    const cs = sm.filter((s) => s.importance === 'core'), gs = sm.filter((s) => s.importance !== 'core');
+    const cc = cs.filter((s) => s.covered).length, gc = gs.filter((s) => s.covered).length;
+    return { ...m, core_covered: cc, core_total: cs.length, core_coverage: cs.length ? r3(cc / cs.length) : 0,
+      general_covered: gc, general_total: gs.length, general_coverage: gs.length ? r3(gc / gs.length) : 0,
+      core_label: coverageLabel('核心覆盖', cc, cs.length), general_label: coverageLabel('一般覆盖', gc, gs.length), score: r3(core + gen), core_score: r3(core), general_score: r3(gen), max_score: maxScore, score_pct: r3((core + gen) / maxScore), coverage_pct: r3(covered.length / skills.length), covered,
       elective_only: sm.filter((s) => s.elective_only).map((s) => s.skill),
       missing: sm.filter((s) => !s.covered && !s.elective_only).map((s) => s.skill), flagged, skills: sm, coreBest };
   });
-  out.sort((a, b) => b.core_score - a.core_score || b.general_score - a.general_score || b.coverage_pct - a.coverage_pct || b.coreBest - a.coreBest || a.school.localeCompare(b.school) || a.major_code.localeCompare(b.major_code));
+  out.sort((a, b) => b.core_coverage - a.core_coverage || b.general_coverage - a.general_coverage || b.core_score - a.core_score || b.general_score - a.general_score || b.coreBest - a.coreBest || a.school.localeCompare(b.school) || a.major_code.localeCompare(b.major_code));
   return { ...base, majors: out.map(({ coreBest: _c, ...m }) => m) };
 }
