@@ -8,14 +8,40 @@ import type { ChatMessage, ChatProvider } from '../../lib/llm.js';
 import { MockProvider } from '../../lib/llm.js';
 import { cacheKey, type LlmCache } from './cache.js';
 
-export const TAG_PROMPT_VERSION = 'course-skill-v3.1-evidence';
+export const TAG_PROMPT_VERSION = 'course-skill-v3.3-evidence-type';
 export const MAX_SKILLS_PER_COURSE = 3;
+/** bump when the code-side validation of model output changes (part of the per-course tagging cache key) */
+export const TAG_VALIDATION_VERSION = 2;
+export const TAG_RULES_VERSION = `${TAG_PROMPT_VERSION}+val${TAG_VALIDATION_VERSION}`;
+
+/** Expert rule (2026-10-13): how a tag is supported by the 培养方案.
+ *  原文明确 = the source text says it beyond the bare course name; 课名推断 = only the course name (or its table row) supports it. */
+export type EvidenceType = '原文明确' | '课名推断';
+/** Recommendation weight per evidence type (course_skill.weight = EVIDENCE_WEIGHT[type] × rank factor 1, 0.75, 0.5).
+ *  原文明确 counts fully; a course-name inference counts half. */
+export const EVIDENCE_WEIGHT: Record<EvidenceType, number> = { '原文明确': 1.0, '课名推断': 0.5 };
+/** 课名推断: at most this many skills per course, and never a 工具与技术 skill. */
+export const MAX_NAME_INFERRED = 2;
+export const rankFactor = (i: number) => Number((1 - i * 0.25).toFixed(2));
+export const tagWeight = (t: EvidenceType, rank: number) => Number((EVIDENCE_WEIGHT[t] * rankFactor(rank)).toFixed(3));
+
+/** Table-row noise: course codes, numbers, separators and the usual column words (学分/学时/考试…). */
+const ROW_NOISE = /[A-Za-z0-9.\s|｜\u00a0,，、。;；:：()（）\[\]【】\-—_/*+~]+|考试|考查|必修|选修|限选|任选|学分|学时|学期|周数|理论|实验|实践|上机|小计|应修|合计|双语|全英文?|秋|春|夏/g;
+/** true when the quote contains nothing beyond the course name and table-row noise -> the tag can only be 课名推断 */
+export function quoteIsNameOnly(quote: string, courseName: string, otherNames: string[] = []): boolean {
+  let q = normQuote(quote);
+  // a list of course names (e.g. the 核心课程 sentence "操作系统、数据库系统、…") describes nothing beyond names either
+  const names = [courseName, ...otherNames].map(normQuote).flatMap((n) => [n, n.replace(/[（(][^）)]*[）)]$/, '')]).filter((x) => x.length >= 2).sort((a, b) => b.length - a.length);
+  for (const x of names) q = q.split(x).join('');
+  // <=2 leftover characters = a name fragment cut at a line break (…、计)
+  return q.replace(ROW_NOISE, '').length <= 2;
+}
 
 export interface SkillRef { id: string; name: string; domain_id: string; domain_name: string; skill_type?: string }
 export interface CourseForTagging { course_id: string; name: string; course_type: string | null; credits: number | null; snippet: string | null; is_core?: number | null; table_block?: string | null }
 /** source text the tagger may quote from: excerpt sent to the model + the full text the quote is checked against */
-export interface TagEvidence { excerpt: string; full: string }
-export interface SkillTag { course_id: string; skill_id: string; rationale: string; evidence_quote: string | null; needs_review: boolean; review_reason: string | null }
+export interface TagEvidence { excerpt: string; full: string; courseNames?: string[] }
+export interface SkillTag { course_id: string; skill_id: string; evidence_type: EvidenceType; rationale: string; evidence_quote: string | null; needs_review: boolean; review_reason: string | null }
 export interface Untagged { course_id: string; is_core: boolean; reason: string }
 export interface TagResult {
   model: string;
@@ -23,7 +49,7 @@ export interface TagResult {
   tags: SkillTag[];
   untagged: Untagged[];
   errors: string[];
-  stats: { llm_calls: number; cached: number; prompt_tokens: number; completion_tokens: number; dropped_unknown_skill: number; dropped_over_limit: number };
+  stats: { llm_calls: number; cached: number; prompt_tokens: number; completion_tokens: number; dropped_unknown_skill: number; dropped_over_limit: number; dropped_name_inferred: number };
 }
 
 export interface SkillTagger {
@@ -69,7 +95,8 @@ export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[]
         '5) 每个技能必须附 quote：从【原文】中逐字复制的一段文字（≤60字），不得改写、拼接或补字；rationale 一句话（≤40字），不要用“可能/常用/一般/通常/或许/大概”等推测性措辞；',
         '6) 只挂课程名或原文直接说明的内容，不要扩展到相邻领域（如“计算机图形学”不挂计算机视觉，“人工智能引论”原文没写深度学习/自然语言处理就只挂机器学习）；思政、英语、体育、军事、劳动、通识、创新创业、实习、毕业论文、综合实践/成果展示等环节，原文没写具体技术内容时 skills 返回空数组并在 reason 说明，绝不硬挂；',
         '7) 每门课都必须出现在输出中，course 字段逐字使用给定课程名；',
-        '8) 只输出 JSON，格式：{"courses":[{"course":string,"skills":[{"skill_id":string,"quote":string,"rationale":string}],"reason":string|null}]}',
+        `8) 每个技能标 evidence_type：原文除课程名（及表格行里的课程号、学分、学时等）之外还写了相关内容 → "原文明确"；只凭课程名 → "课名推断"。课名推断只用于明确的情况：课程名直接包含技能名，或是该领域的标准导论课；最多 ${MAX_NAME_INFERRED} 个，且只能是知识类技能（[工具] 一律不能推断）；“计算概论”这类名字宽泛、各校内容差别大的课宁可不挂。注意：原文只列出课程名、没有课程简介，不是不挂的理由——专业课的课程名直接对应某个知识类技能时，必须按课名推断挂上（例：“计算机系统导论”→计算机组成与体系结构+操作系统原理，“嵌入式系统原理与应用”→嵌入式硬件，“汇编语言”→计算机组成与体系结构）；课程名里直接写出工具（如“数据库系统”含“数据库”）时，该工具技能算原文明确；`,
+        '9) 只输出 JSON，格式：{"courses":[{"course":string,"skills":[{"skill_id":string,"evidence_type":"原文明确"|"课名推断","quote":string,"rationale":string}],"reason":string|null}]}',
         '',
         '【技能清单】',
         skillText,
@@ -80,11 +107,12 @@ export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[]
 }
 
 /** Validate the model's JSON against the course and skill lists (pure; unit-tested). */
-export function parseTagResponse(text: string, courses: CourseForTagging[], skills: SkillRef[], sourceText?: string) {
+export function parseTagResponse(text: string, courses: CourseForTagging[], skills: SkillRef[], sourceText?: string, courseNames: string[] = []) {
+  const allNames = [...new Set([...courseNames, ...courses.map((c) => c.name)])];
   const errors: string[] = [];
   const tags: SkillTag[] = [];
   const untagged: Untagged[] = [];
-  let droppedUnknown = 0, droppedOver = 0;
+  let droppedUnknown = 0, droppedOver = 0, droppedNameInferred = 0;
   const ids = new Set(skills.map((s) => s.id));
   const typeOf = new Map(skills.map((s) => [s.id, s.skill_type]));
   const hay = normQuote(sourceText ?? courses.map((c) => c.snippet ?? '').join('\n'));
@@ -115,18 +143,27 @@ export function parseTagResponse(text: string, courses: CourseForTagging[], skil
       // a tool skill is only allowed when the verified quote names the tool; otherwise drop it (never accept a guessed tool)
       const term = TOOL_TERMS[id] ?? (typeOf.get(id) === '工具与技术' ? new RegExp(skills.find((x) => x.id === id)!.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null);
       if (term && !(found && term.test(quote!))) { errors.push(`${c.name}: tool skill ${id} dropped (source text does not name it)`); continue; }
+      // evidence type: the model's claim, downgraded by code when the quote is unverified or holds nothing beyond the course name.
+      // A tool whose name is literally part of the course name (数据库系统 -> 数据库与SQL) counts as named by the text (原文明确).
+      const nameOnly = !found || quoteIsNameOnly(quote!, c.name, allNames);
+      const namedInCourseName = !!term && found && term.test(c.name);
+      const evidence_type: EvidenceType = namedInCourseName ? '原文明确' : s.evidence_type === '课名推断' || nameOnly ? '课名推断' : '原文明确';
+      if (evidence_type === '课名推断') {
+        if (term) { droppedNameInferred++; errors.push(`${c.name}: tool skill ${id} dropped (课名推断 never yields a tool skill)`); continue; }
+        if (picked.filter((x) => x.evidence_type === '课名推断').length >= MAX_NAME_INFERRED) { droppedNameInferred++; errors.push(`${c.name}: ${id} dropped (课名推断 max ${MAX_NAME_INFERRED})`); continue; }
+      }
       const reasons: string[] = [];
       if (!quote) reasons.push('没有原文引用');
       else if (!found) reasons.push('引用不在原文中');
       const hedge = rationale.match(HEDGE);
       if (hedge) reasons.push(`理由含推测词「${hedge[0]}」`);
       seen.add(id);
-      picked.push({ course_id: c.course_id, skill_id: id, rationale, evidence_quote: quote, needs_review: reasons.length > 0, review_reason: reasons.length ? reasons.join('；') : null });
+      picked.push({ course_id: c.course_id, skill_id: id, evidence_type, rationale, evidence_quote: quote, needs_review: reasons.length > 0, review_reason: reasons.length ? reasons.join('；') : null });
     }
     if (picked.length) tags.push(...picked);
     else untagged.push({ course_id: c.course_id, is_core: isCore(c), reason: typeof item.reason === 'string' && item.reason.trim() ? item.reason.trim() : 'no matching skill' });
   }
-  return { tags, untagged, errors, droppedUnknown, droppedOver };
+  return { tags, untagged, errors, droppedUnknown, droppedOver, droppedNameInferred };
 }
 
 export class LlmSkillTagger implements SkillTagger {
@@ -135,7 +172,7 @@ export class LlmSkillTagger implements SkillTagger {
 
   async tag(courses: CourseForTagging[], skills: SkillRef[], ctx: { school: string; major: string }, evidence?: TagEvidence): Promise<TagResult> {
     const res: TagResult = { model: this.provider.model, mock: this.provider.isMock, tags: [], untagged: [], errors: [],
-      stats: { llm_calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0, dropped_unknown_skill: 0, dropped_over_limit: 0 } };
+      stats: { llm_calls: 0, cached: 0, prompt_tokens: 0, completion_tokens: 0, dropped_unknown_skill: 0, dropped_over_limit: 0, dropped_name_inferred: 0 } };
     if (!courses.length || !skills.length) return res;
     const messages = buildTagMessages(courses, skills, ctx, evidence);
     const key = cacheKey(this.provider.model, TAG_PROMPT_VERSION, messages.map((m) => m.content).join('\n\u0000\n'));
@@ -149,10 +186,11 @@ export class LlmSkillTagger implements SkillTagger {
       text = r.text;
       if (!this.provider.isMock) this.cache.set(key, { model: this.provider.model, promptVersion: TAG_PROMPT_VERSION, response: text, promptTokens: r.promptTokens, completionTokens: r.completionTokens });
     }
-    const p = parseTagResponse(text, courses, skills, evidence?.full);
+    const p = parseTagResponse(text, courses, skills, evidence?.full, evidence?.courseNames);
     Object.assign(res, { tags: p.tags, untagged: p.untagged, errors: p.errors });
     res.stats.dropped_unknown_skill = p.droppedUnknown;
     res.stats.dropped_over_limit = p.droppedOver;
+    res.stats.dropped_name_inferred = p.droppedNameInferred;
     return res;
   }
 }

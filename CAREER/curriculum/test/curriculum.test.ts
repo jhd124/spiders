@@ -245,8 +245,9 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   const p = parseTagResponse(resp, courses, skills);
   assert.deepEqual(p.tags.filter((t) => t.course_id === 'a').map((t) => t.skill_id), ['software.dsa']);
   assert.equal(p.droppedUnknown, 1);
-  assert.equal(p.tags.filter((t) => t.course_id === 'c').length, 3);
-  assert.equal(p.droppedOver, 1);
+  // no verified quote -> 课名推断 -> at most 2 (MAX_NAME_INFERRED)
+  assert.equal(p.tags.filter((t) => t.course_id === 'c').length, 2);
+  assert.equal(p.droppedNameInferred, 2);
   assert.deepEqual(p.untagged, [{ course_id: 'b', is_core: false, reason: '综合训练' }]);
   assert.equal(parseTagResponse('not json', courses, skills).untagged.length, 3);
 
@@ -316,4 +317,75 @@ test('evidence-based tagging: verbatim quote checked, hedges flagged, tool skill
   assert.match(get('1', 'software.os')!.review_reason!, /引用不在原文中.*通常/);
   assert.equal(get('2', 'hardware.fpga')?.needs_review, false);
   assert.match(get('2', 'hardware.comp-arch')!.review_reason!, /没有原文引用/);
+});
+
+test('evidence_type: name-only quote -> 课名推断 (max 2, knowledge skills only); weights documented', async () => {
+  const { parseTagResponse, quoteIsNameOnly, EVIDENCE_WEIGHT, tagWeight } = await import('../skills.js');
+  assert.deepEqual(EVIDENCE_WEIGHT, { '原文明确': 1.0, '课名推断': 0.5 });
+  assert.equal(tagWeight('课名推断', 0), 0.5);
+  assert.equal(quoteIsNameOnly('sd02130 | 信息安全导论 | 3 | 48 | 考试 | 5', '信息安全导论'), true);
+  assert.equal(quoteIsNameOnly('信息安全导论：讲授对称密码与公钥密码', '信息安全导论'), false);
+  assert.equal(quoteIsNameOnly('操作系统、数据库系统、编译原理、计', '操作系统', ['数据库系统', '编译原理']), true, 'a list of course names is name-only');
+  const K = (id: string, name: string) => ({ id, name, domain_id: id.split('.')[0]!, domain_name: 'd', skill_type: '专业知识' });
+  const skills = [K('network-sec.infosec-basics', '信息安全基础'), K('network-sec.crypto', '密码学'), K('network-sec.protocols', '计算机网络协议'),
+    { ...K('software.linux', 'Linux使用'), skill_type: '工具与技术' }, { ...K('software.db-sql', '数据库与SQL'), skill_type: '工具与技术' }];
+  const source = 'sd1 | 信息安全导论 | 3 | 48\nsd2 | 云计算技术 | 2 | 32\nsd3 | 数据库系统 | 4 | 64\nsd4 | 计算机网络 | 4 | 64 课程讲授TCP/IP协议栈';
+  const courses = ['信息安全导论', '云计算技术', '数据库系统', '计算机网络'].map((name, i) => ({ course_id: String(i), name, course_type: '必修', credits: 2, snippet: null, is_core: 0 }));
+  const resp = JSON.stringify({ courses: [
+    { course: '信息安全导论', skills: ['network-sec.infosec-basics', 'network-sec.crypto', 'network-sec.protocols'].map((skill_id) => ({ skill_id, evidence_type: '原文明确', quote: 'sd1 | 信息安全导论 | 3 | 48', rationale: '课名' })) },
+    { course: '云计算技术', skills: [{ skill_id: 'software.linux', evidence_type: '课名推断', quote: '云计算技术', rationale: 'x' }] },
+    { course: '数据库系统', skills: [{ skill_id: 'software.db-sql', evidence_type: '原文明确', quote: '数据库系统 | 4', rationale: '课名含数据库' }] },
+    { course: '计算机网络', skills: [{ skill_id: 'network-sec.protocols', evidence_type: '原文明确', quote: '课程讲授TCP/IP协议栈', rationale: '原文' }] },
+  ] });
+  const p = parseTagResponse(resp, courses, skills, source);
+  const of = (c: string) => p.tags.filter((t) => t.course_id === c);
+  assert.deepEqual(of('0').map((t) => [t.skill_id, t.evidence_type]), [['network-sec.infosec-basics', '课名推断'], ['network-sec.crypto', '课名推断']], 'model claim downgraded; max 2');
+  assert.equal(p.droppedNameInferred, 1);
+  assert.equal(of('1').length, 0, 'tool never inferred');
+  assert.equal(of('2')[0]?.evidence_type, '原文明确', 'tool literally in the course name counts as named');
+  assert.equal(of('3')[0]?.evidence_type, '原文明确');
+});
+
+test('tagging stability: per-course cache, re-run is a no-op, reviewed rows survive a rules-version bump', async () => {
+  const { tagSkills } = await import('../tag.js');
+  const { LlmSkillTagger } = await import('../skills.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'stability.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = OFF');
+  for (const [n, core] of [['操作系统', 1], ['密码学', 0], ['大学英语', 0]] as const) {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 's', ?, 'u', 'llm')").run(`s:${n}`, n);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, snippet) VALUES ('s', '080901', ?, 'u', 'llm', '必修', ?, ?)").run(`s:${n}`, core, `x | ${n} | 3`);
+  }
+  db.close();
+  let calls = 0, nonce = 0;
+  const ids: Record<string, string> = { '操作系统': 'software.os', '密码学': 'network-sec.crypto' };
+  // a deliberately non-deterministic fake model: rationale differs on every call
+  const provider = { model: 'fake', isMock: false, async chat(m: { content: string }[]) {
+    calls++; nonce++;
+    const names = m[m.length - 1]!.content.split('\n').filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/^\d+\. /, '').split('｜')[0]!);
+    return { model: 'fake', promptTokens: 10, completionTokens: 5, text: JSON.stringify({ courses: names.map((n) => ({ course: n, reason: ids[n] ? null : '通识课',
+      skills: ids[n] ? [{ skill_id: ids[n], evidence_type: '课名推断', quote: `x | ${n} | 3`, rationale: `run ${nonce}` }] : [] })) }) };
+  } };
+  const dump = () => { const d = new Database(dbPath); const r = d.prepare('SELECT rowid, * FROM course_skill ORDER BY course_id, skill_id').all(); const u = d.prepare('SELECT * FROM course_skill_untagged ORDER BY course_id').all(); d.close(); return JSON.stringify([r, u]); };
+  const s1 = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(s1.llm_calls, 1); assert.equal(s1.tags, 2); assert.equal(s1.untagged.length, 1);
+  const first = dump();
+  const s2 = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(s2.llm_calls, 0); assert.equal(s2.reused, 3); assert.equal(calls, 1);
+  assert.equal(dump(), first, 'second run leaves every row byte-identical');
+  assert.match(first, /"evidence_type":"课名推断"/); assert.match(first, /"weight":0.5/);
+
+  const d = new Database(dbPath);
+  d.prepare("UPDATE course_skill SET reviewed = 1, rationale = '专家确认' WHERE course_id = 's:操作系统'").run();
+  const before = JSON.stringify(d.prepare("SELECT rowid, * FROM course_skill WHERE course_id = 's:操作系统'").get());
+  d.close();
+  const s3 = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()), { rulesVersion: 'bumped' });
+  assert.equal(s3.llm_calls, 1); assert.equal(s3.retagged, 3);
+  const d2 = new Database(dbPath);
+  assert.equal(JSON.stringify(d2.prepare("SELECT rowid, * FROM course_skill WHERE course_id = 's:操作系统'").get()), before, 'reviewed row untouched');
+  assert.match((d2.prepare("SELECT rationale FROM course_skill WHERE course_id = 's:密码学'").get() as { rationale: string }).rationale, /run 2/, 'unreviewed row updated in place');
+  d2.close();
 });
