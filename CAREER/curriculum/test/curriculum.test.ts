@@ -322,7 +322,7 @@ test('evidence-based tagging: verbatim quote checked, hedges flagged, tool skill
 test('evidence_type: name-only quote -> 课名推断 (max 2, knowledge skills only); weights documented', async () => {
   const { parseTagResponse, quoteIsNameOnly, EVIDENCE_WEIGHT, tagWeight } = await import('../skills.js');
   assert.equal(EVIDENCE_WEIGHT['课名推断'], 0.5);
-  assert.equal(tagWeight('课名推断', 0), 0.5);
+  assert.equal(tagWeight('课名推断'), 0.5);
   assert.equal(quoteIsNameOnly('sd02130 | 信息安全导论 | 3 | 48 | 考试 | 5', '信息安全导论'), true);
   assert.equal(quoteIsNameOnly('信息安全导论：讲授对称密码与公钥密码', '信息安全导论'), false);
   assert.equal(quoteIsNameOnly('操作系统、数据库系统、编译原理、计', '操作系统', ['数据库系统', '编译原理']), true, 'a list of course names is name-only');
@@ -432,7 +432,8 @@ test('核心课名 post-step: no LLM, idempotent, reviewed rows only get type/we
     ('s:操作系统', 'software.os', 0.5, 'llm', 1, '专家确认', 't0', 'q', '课名推断'),
     ('s:计算机系统导论', 'software.os', 0.375, 'llm', 0, 'r', 't0', 'q', '课名推断')`).run();
   const r1 = classifyCoreNames(db);
-  assert.deepEqual(r1, { checked: 2, updated: 1, core_name: 1 });
+  assert.deepEqual(r1, { checked: 2, updated: 2, core_name: 1 });
+  assert.equal((db.prepare("SELECT weight FROM course_skill WHERE course_id = 's:计算机系统导论'").get() as { weight: number }).weight, 0.5, '0.375 -> exactly 0.5 (no rank multiplier)');
   const os = db.prepare("SELECT * FROM course_skill WHERE course_id = 's:操作系统'").get() as Record<string, unknown>;
   assert.equal(os.evidence_type, '核心课名'); assert.equal(os.weight, 0.8);
   assert.equal(os.reviewed, 1); assert.equal(os.rationale, '专家确认'); assert.equal(os.tagged_at, 't0');
@@ -442,4 +443,34 @@ test('核心课名 post-step: no LLM, idempotent, reviewed rows only get type/we
   db.close();
   // the function takes no tagger/provider: it cannot call an LLM
   assert.equal(classifyCoreNames.length, 1);
+});
+
+test('ingest refreshes source facts on reviewed rows (server bug: approved before 008 -> is_core lost)', async () => {
+  const { ingestCurriculum } = await import('../load.js');
+  const { RAW_NAME } = await import('../crawler.js');
+  const { rawPath, cleanPath } = await import('../../../lib/io.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'facts.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT INTO major (code, base_code, name, category_code, category_name, is_special, is_controlled, is_engineering, degree_categories, catalog_edition, source_url, updated_at) VALUES ('080901','080901','计算机科学与技术','08','工学',0,0,1,'工学',2026,'x','t')").run();
+  const manifest = join(TMP, 'facts.csv');
+  writeFileSync(manifest, 'school,major_code,grade_year,url,format,verified_by,notes\n测试大学,080901,2024,https://x/facts.pdf,pdf,e,\n');
+  const { readManifest } = await import('../manifest.js');
+  const id = readManifest(manifest)[0]!.id;
+  mkdirSync(join(TMP, 'raw'), { recursive: true }); mkdirSync(join(TMP, 'clean'), { recursive: true });
+  writeFileSync(rawPath(RAW_NAME), JSON.stringify({ docs: [] }));
+  const course = { name: '操作系统', course_type: '必修', block: '专业核心课程', module: null, core_in_section: true, credits: 4, hours: null, semester: '4', page: 3, snippet: '操作系统', confidence: 0.9 };
+  writeFileSync(cleanPath(RAW_NAME), JSON.stringify({ results: [{ source_id: id, school: '测试大学', major_code: '080901', mock: false, model: 'm', doc_sha256: 'x', url: 'u', courses: [course] }] }));
+  ingestCurriculum(db, { manifest });
+  assert.equal((db.prepare('SELECT count(*) n FROM major_course').get() as { n: number }).n, 1);
+  // simulate the server: approved before 008, so the 008 columns kept their defaults and 009 derived is_core 0
+  db.prepare("UPDATE major_course SET review_status = 'approved', reviewed = 1, core_in_section = 0, is_core = 0, course_type = NULL, table_block = NULL, credits = 9").run();
+  ingestCurriculum(db, { manifest });
+  const r = db.prepare('SELECT * FROM major_course').get() as Record<string, unknown>;
+  assert.equal(r.core_in_section, 1); assert.equal(r.is_core, 1); assert.equal(r.course_type, '必修'); assert.equal(r.table_block, '专业核心课程');
+  assert.equal(r.review_status, 'approved'); assert.equal(r.credits, 9, 'reviewed values other than source facts untouched');
+  db.close();
 });

@@ -7,7 +7,7 @@ interface Item {
   review_status: string; reviewer: string | null; reviewed_at: string | null; review_note: string | null;
   tags: Tag[]; untagged_reason: string | null;
 }
-interface Tag { skill_id: string; skill: string; skill_type: string; evidence_quote: string | null; rationale: string | null; needs_review: number; review_reason: string | null; evidence_type: '原文明确' | '核心课名' | '课名推断' | null; weight: number | null }
+interface Tag { skill_id: string; skill: string; skill_type: string; evidence_quote: string | null; rationale: string | null; needs_review: number; review_reason: string | null; evidence_type: '原文明确' | '核心课名' | '课名推断' | null; weight: number | null; tag_rank: number | null }
 /** expert rule (009): 核心课 only from the 正文 核心课程 section; table-only 专业核心 block = 专业必修 */
 const coreLabel = (it: Item) => (it.is_core === 1 ? '核心课' : it.table_block && /专业核心/.test(it.table_block) ? '专业必修' : null);
 

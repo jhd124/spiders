@@ -19,13 +19,13 @@ export const TAG_RULES_VERSION = `${TAG_PROMPT_VERSION}+val${TAG_VALIDATION_VERS
 export type EvidenceType = '原文明确' | '课名推断';
 /** stored course_skill.evidence_type: the tagger's type, plus 核心课名 assigned deterministically afterwards (see coreNameMatches) */
 export type StoredEvidenceType = EvidenceType | '核心课名';
-/** Recommendation weight per evidence type (course_skill.weight = EVIDENCE_WEIGHT[type] × rank factor 1, 0.75, 0.5).
+/** Recommendation weight per evidence type: course_skill.weight = EVIDENCE_WEIGHT[type] exactly (no rank/confidence multiplier).
+ *  The model's ordering is stored separately in course_skill.tag_rank (1 = most relevant), used only for review sorting.
  *  原文明确 counts fully; 核心课名 (a 正文-listed core course whose name is the skill) 0.8; other course-name inference half. */
 export const EVIDENCE_WEIGHT: Record<StoredEvidenceType, number> = { '原文明确': 1.0, '核心课名': 0.8, '课名推断': 0.5 };
 /** 课名推断: at most this many skills per course, and never a 工具与技术 skill. */
 export const MAX_NAME_INFERRED = 2;
-export const rankFactor = (i: number) => Number((1 - i * 0.25).toFixed(2));
-export const tagWeight = (t: StoredEvidenceType, rank: number) => Number((EVIDENCE_WEIGHT[t] * rankFactor(rank)).toFixed(3));
+export const tagWeight = (t: StoredEvidenceType) => EVIDENCE_WEIGHT[t];
 
 /**
  * 核心课名 (expert, 2026-10-13): a 课名推断 tag is upgraded to 核心课名 when the course is a 正文-listed core course (is_core = 1)

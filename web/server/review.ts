@@ -41,8 +41,8 @@ review.get('/items', (c) => {
     SELECT mc.school_id, mc.major_code, mc.course_id, co.name, mc.course_type, mc.table_block, mc.module, mc.core_in_section, mc.is_core, mc.credits, mc.hours, mc.semester, mc.source_page,
       mc.snippet, mc.source_url, mc.model, mc.confidence, mc.review_status, mc.reviewer, mc.reviewed_at, mc.review_note, mc.plan_year,
       (SELECT json_group_array(json_object('skill_id', cs.skill_id, 'skill', sk.name, 'skill_type', sk.skill_type, 'evidence_quote', cs.evidence_quote,
-          'rationale', cs.rationale, 'needs_review', cs.needs_review, 'review_reason', cs.review_reason, 'evidence_type', cs.evidence_type, 'weight', cs.weight, 'reviewed', cs.reviewed))
-        FROM course_skill cs JOIN skill sk ON sk.id = cs.skill_id WHERE cs.course_id = mc.course_id) AS tags_json,
+          'rationale', cs.rationale, 'needs_review', cs.needs_review, 'review_reason', cs.review_reason, 'evidence_type', cs.evidence_type, 'weight', cs.weight, 'tag_rank', cs.tag_rank, 'reviewed', cs.reviewed))
+        FROM (SELECT * FROM course_skill WHERE course_id = mc.course_id ORDER BY tag_rank IS NULL, tag_rank) cs JOIN skill sk ON sk.id = cs.skill_id) AS tags_json,
       (SELECT reason FROM course_skill_untagged u WHERE u.course_id = mc.course_id) AS untagged_reason
     FROM major_course mc JOIN course co ON co.id = mc.course_id
     WHERE mc.school_id = ? AND mc.major_code = ?

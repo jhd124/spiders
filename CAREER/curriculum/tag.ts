@@ -14,7 +14,7 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LlmSkillTagger, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, EVIDENCE_WEIGHT, rankFactor, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
+import { LlmSkillTagger, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
 import { CURRICULUM_RAW } from './fetch.js';
 import type { DocFormat } from './manifest.js';
 import { extractText } from './text.js';
@@ -57,7 +57,7 @@ export const courseTagKey = (model: string, name: string, ownEvidence: string, s
 /**
  * Post-step (no LLM): recompute the derived evidence_type (核心课名 vs 课名推断) and weight of every stored course_skill row.
  * Only these two columns change; skill, quote, review state, tagged_at are never touched. Applies to reviewed rows too.
- * Rank factor is recovered from the stored weight / current type weight. Idempotent: a second call updates 0 rows.
+ * weight = EVIDENCE_WEIGHT[type] exactly. Idempotent: a second call updates 0 rows.
  */
 export function classifyCoreNames(db: Database.Database): { checked: number; updated: number; core_name: number } {
   const rows = db.prepare(`SELECT cs.rowid AS rid, cs.weight, cs.evidence_type, c.name AS course, s.name AS skill,
@@ -69,8 +69,7 @@ export function classifyCoreNames(db: Database.Database): { checked: number; upd
   for (const r of rows) {
     const t = storedEvidenceType(r.evidence_type, r.core === 1, r.course, r.skill);
     if (t === '核心课名') coreName++;
-    const rank = r.weight == null ? 1 : r.weight / EVIDENCE_WEIGHT[r.evidence_type];
-    const w = Number((EVIDENCE_WEIGHT[t] * rank).toFixed(3));
+    const w = tagWeight(t);
     if (t !== r.evidence_type || w !== r.weight) { upd.run(t, w, r.rid); updated++; }
   }
   return { checked: rows.length, updated, core_name: coreName };
@@ -140,9 +139,9 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     const write = db.transaction(() => {
       if (mock) return; // mock output is never written
       const existing = db.prepare('SELECT rowid AS rid, * FROM course_skill WHERE course_id = ?');
-      const ins = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, confidence, reviewed, rationale, source, model, tagged_at, evidence_quote, needs_review, review_reason, evidence_type)
-        VALUES (?, ?, ?, 'llm', NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (course_id, skill_id) DO NOTHING`);
-      const upd = db.prepare(`UPDATE course_skill SET weight = ?, rationale = ?, source = ?, model = ?, tagged_at = ?, evidence_quote = ?, needs_review = ?, review_reason = ?, evidence_type = ?
+      const ins = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, confidence, reviewed, rationale, source, model, tagged_at, evidence_quote, needs_review, review_reason, evidence_type, tag_rank)
+        VALUES (?, ?, ?, 'llm', NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (course_id, skill_id) DO NOTHING`);
+      const upd = db.prepare(`UPDATE course_skill SET weight = ?, rationale = ?, source = ?, model = ?, tagged_at = ?, evidence_quote = ?, needs_review = ?, review_reason = ?, evidence_type = ?, tag_rank = ?
         WHERE rowid = ? AND reviewed = 0 AND extraction_method = 'llm'`);
       const del = db.prepare("DELETE FROM course_skill WHERE rowid = ? AND reviewed = 0 AND extraction_method = 'llm'");
       const getUn = db.prepare('SELECT is_core, reason, model FROM course_skill_untagged WHERE course_id = ?');
@@ -163,11 +162,11 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
           if (locked.has(x.skill_id)) return;
           want.add(x.skill_id);
           const st = storedEvidenceType(x.evidence_type, coreCourse.has(c.course_id), c.name, skillName.get(x.skill_id) ?? '');
-          const vals = [tagWeight(st, i), x.rationale, t.name, tagModel, x.evidence_quote, x.needs_review ? 1 : 0, x.review_reason, st] as const;
+          const vals = [tagWeight(st), x.rationale, t.name, tagModel, x.evidence_quote, x.needs_review ? 1 : 0, x.review_reason, st, i + 1] as const;
           const old = mine.get(x.skill_id);
-          if (!old) { ins.run(c.course_id, x.skill_id, vals[0], vals[1], vals[2], vals[3], now, vals[4], vals[5], vals[6], vals[7]); sum.rows_inserted++; return; }
-          const same = old.weight === vals[0] && old.rationale === vals[1] && old.source === vals[2] && old.evidence_quote === vals[4] && old.needs_review === vals[5] && old.review_reason === vals[6] && old.evidence_type === vals[7];
-          if (!same) { upd.run(vals[0], vals[1], vals[2], vals[3], now, vals[4], vals[5], vals[6], vals[7], old.rid); sum.rows_updated++; }
+          if (!old) { ins.run(c.course_id, x.skill_id, vals[0], vals[1], vals[2], vals[3], now, vals[4], vals[5], vals[6], vals[7], vals[8]); sum.rows_inserted++; return; }
+          const same = old.weight === vals[0] && old.rationale === vals[1] && old.source === vals[2] && old.evidence_quote === vals[4] && old.needs_review === vals[5] && old.review_reason === vals[6] && old.evidence_type === vals[7] && old.tag_rank === vals[8];
+          if (!same) { upd.run(vals[0], vals[1], vals[2], vals[3], now, vals[4], vals[5], vals[6], vals[7], vals[8], old.rid); sum.rows_updated++; }
         });
         for (const [sk, old] of mine) if (!want.has(sk)) { del.run(old.rid); sum.rows_deleted++; }
         if (res.untagged) {
