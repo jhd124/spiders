@@ -207,7 +207,7 @@ npm run test:career                                                             
 
 就业/教学质量报告（006，仅表结构）：`employment_report.report_type` = 就业质量报告 | 本科教学质量报告，新增 graduation_rate（本科毕业率）、placement_rate（去向落实率）、degree_rate、report_source_id（升学率 further_study_rate、出国率 abroad_rate 已有）；链接清单 `seeds/report_sources.csv`（school,report_type,year,url,format,verified_by,notes），ingest 时同步到 `report_source`，暂不抽取。
 
-第二阶段（课程 → 技能）：`curriculum/skills.ts` 的 `SkillTagger` 接口，目前为 `NoopSkillTagger`（二级技能未定义）。
+第二阶段（课程 → 技能）：见下方「课程 → 二级技能打标签」。
 
 ## 全量课程抽取（008，curriculum/tables.ts）
 
@@ -215,19 +215,8 @@ npm run test:career                                                             
 - 分块：「核心课程设置」段落单独作为一块；课程表按课程类别切块，以「应修小计」作为块的结束，每块都带上表名、表头，以及竖排类别标签的碎片拼接（例如「学科/平台/基础/课程」拼成「学科平台基础课程」）。这样学分不会因为跨块或跨页而丢失。认不出课程表时，退回原来的关键词分块。
 - `major_course.course_type` 的取值现为 必修/限选/任选；005 时的「核心/主干」保留在 `core_type_legacy` 列，不再写入。
 - 核心课分两个事实分别存：`core_in_section`（课程是否列在「四、核心课程设置」里）和 `table_block`（课程在课程表里的类别块）。`is_core` 取值：1 = 段落中列出；NULL = 只有课程表把它归在「专业核心」块（待专家定规则）；0 = 两者都不是。
-- `npm run clean:career-curriculum -- --refresh` 会忽略缓存重新调用大模型。
-
-## 全部课程 + 核心课来源（008，tables.ts）
-
-- 抽取范围从「核心/主干课」扩大到课程设置表里的**每一门课**（必修、限选、任选都抽），加上「四、核心课程设置」段落里列出的课。prompt 版本是 `curriculum-all-v2`。
-- 分块方式：按课程类别把课程表切开，一个类别一块，每块到「应修小计」为止。每块都带上表格标题、表头和「类别标签碎片」：PDF 里类别名是竖排的，会被拆成「学科/平台/基础/课程」这样的碎片夹在行与行之间，所以拼好给模型参考，这样基础课的学分不会再丢。识别不出课程表时，退回到原来的关键词分块。
-- `major_course` 的字段：
-  - `course_type`：必修 / 限选 / 任选 / NULL。005 里旧的 核心/主干 值改名为 `core_type_legacy`，只保留不再写入。
-  - `module`：限选模块，比如「系统与安全模块」。
-  - 核心课分成两个事实分别存，不在代码里下结论：`core_in_section`（是否列在「核心课程设置」段落里）和 `table_block`（课程表里所在的类别块，比如「专业核心课程」）。
-  - `is_core`：段落里列出的记 1；只有课程表把它放在「专业核心」块里的记 NULL，表示待专家定规则；两者都不是的记 0。
-- 打标签时，两个事实满足任意一个就按「核心课」处理。通识课（思政、英语、体育等）对不上技能清单时，会进入未打标签列表。
-- `npm run clean:career-curriculum -- --refresh`：不读缓存，重新调用模型。ingest 会删掉最新一次抽取里已经没有、而且还没审核的旧行。
+- `npm run clean:career-curriculum -- --refresh` 会忽略缓存重新调用大模型。ingest 会删掉最新一次抽取里已经没有、而且还没审核的旧行。
+- 打标签时，两个核心事实满足任意一个就按核心课处理；通识课（思政、英语、体育等）对不上技能清单时进入未打标签列表。
 
 ## 课程 → 二级技能打标签（007，curriculum/skills.ts + tag.ts）
 
