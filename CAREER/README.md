@@ -169,6 +169,18 @@ erDiagram
 - **工科**：仍按"学位授予门类含工学"判定，共 329 个。新增 `engineering_degree_type` 字段，取值 `only`（只授工学，291 个）或 `optional`（可授工学，同时可授其他门类，38 个）。新增 `degree_display` 字段用于控制台显示，例如工程管理显示为"可授工学/管理学"。
 - **一级能力域**：保持 20 个，不合并。
 
+## 008：抽取全部课程，核心课的两种来源分开记录
+
+- 现在抽的是培养方案课程表里的全部课程（必修、限选、任选），再加上「核心课程设置」段落里列出的课程。新的 prompt 版本是 `curriculum-all-v2`。
+- `tables.ts` 按「课程类别」把课程表切开，每个类别一块。每块都带上表名、表头和拼好的竖排类别名提示，保证一行课程和它的类别、学分在同一块里。「应修小计」行是块的结束标志。
+- `major_course` 的字段：
+  - `course_type`：必修 / 限选 / 任选 / NULL。005 里旧的「核心/主干」那一列改名为 `core_type_legacy`，不再写入。
+  - `core_in_section`：课程是否出现在「核心课程设置」段落里。
+  - `table_block`：课程表里的类别块名称，例如 专业核心课程。
+  - `module`：模块，例如 系统与安全模块。
+  - `is_core`：1 = 段落里列出；NULL = 只有课程表块写着「专业核心」，还没定；0 = 两处都没有。专家定好规则后可以直接按这两列算出来。
+- 重新抽取：`npm run clean:career-curriculum -- --refresh`，会跳过缓存直接问模型。同一来源、同一专业下，新结果里已经没有的待审核行会被删掉。
+
 ## 培养方案 → 专业核心课（005，curriculum/）
 
 流程：`seeds/curriculum_sources.csv`（专家填链接）→ `curriculum/crawler.ts`（礼貌抓取：robots.txt、按域名间隔 `SPIDERS_DELAY_MS`、真实 UA；原件存 `data/raw/career/curriculum/<id>.<ext>`，sha256 记入 `source_document`）→ 文本抽取（PDF: unpdf 按页、表格单元格用 ` | ` 分隔；HTML: cheerio；DOCX: mammoth；旧版 .doc 不支持，请要 PDF/DOCX）→ `curriculum/clean.ts`（LLM 抽取）→ `career:ingest`（写 `course` / `major_course`，`extraction_method='llm'`、model、confidence、页码、原文片段、`reviewed=0`、`review_status='pending'`）→ 控制台 **课程审核**（`#/review`）逐条 通过/驳回/修改，记录审核人和时间。

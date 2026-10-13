@@ -31,8 +31,13 @@ export function migrate(dbPath = CAREER_DB, log: (s: string) => void = console.l
         r.checksum,
       ]),
     );
+    const files = readdirSync(DIR).filter((f) => /^\d{3}_.+\.sql$/.test(f)).sort();
+    // A DB can be ahead of the code (e.g. a deploy applied NNN, then a revert removed the file). Never re-run or undo;
+    // just warn so the operator adds a forward migration instead of silently diverging.
+    const known = new Set(files.map((f) => f.slice(0, 3)));
+    for (const v of done.keys()) if (!known.has(v)) log(`[migrate] WARNING version ${v} is applied in this DB but its file is missing (reverted?); add a forward migration, do not delete the row`);
     const applied: string[] = [];
-    for (const f of readdirSync(DIR).filter((f) => /^\d{3}_.+\.sql$/.test(f)).sort()) {
+    for (const f of files) {
       const version = f.slice(0, 3);
       const sql = readFileSync(join(DIR, f), 'utf8');
       const sum = createHash('sha256').update(sql).digest('hex').slice(0, 16);
