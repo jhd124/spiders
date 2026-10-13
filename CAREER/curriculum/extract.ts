@@ -119,8 +119,12 @@ export const typeFromBlock = (block: string | null, fallback: CourseType | null)
   !block ? fallback : /限选/.test(block) ? '限选' : /任选|选修/.test(block) ? '任选' : /必修/.test(block) ? '必修' : fallback ?? impliedType(block);
 /** a block whose name says neither 必修 nor 选修 but is a required category by name (学科平台基础课程, 专业基础课程, 专业核心课程,
  *  重点提升计划); 通识教育核心课程 is a choice category and stays null. Only used when the model gave no course_type. */
-export const impliedType = (block: string): CourseType | null =>
-  /通识/.test(block) ? null : /(平台|基础|核心)课程|重点提升计划/.test(block) ? '必修' : null;
+export const impliedType = (block: string): CourseType | null => {
+  const b = block.replace(/\s+/g, '');
+  // a 课程组 table (SDU 080902 "大学英语课题组": 17 options of the required 8-credit 大学英语课程组) = limited choice
+  if (/(课程组|课题组)$|大学英语课程设置/.test(b)) return '限选';
+  return /通识/.test(b) ? null : /(平台|基础|核心)课程|重点提升计划/.test(b) ? '必修' : null;
+};
 
 /** names listed in a 核心课程 section text: split on list punctuation after joining line breaks ("机器学\n习"), lead-in phrases
  *  ("本专业必修核心课程包括…", "专业核心课程：") and a trailing 等 removed */
@@ -209,6 +213,7 @@ export async function extractCourses(
   // (fallback chunks also contain lists such as 专业基础课程/主干学科, which are not core).
   if (table) {
     res.errors.push(`table parsed without LLM (${table.layout}): ${table.courses.length} rows`);
+    for (const w of table.warnings) { res.errors.push(`table warning: ${w}`); console.warn(`[career] curriculum ${ctx.school} ${ctx.majorCode}: ${w}`); }
     for (const c of table.courses) {
       const k = normCourseName(c.name);
       const prev = best.get(k);

@@ -4,14 +4,14 @@
  *           ("1. | 专业集群基础课程…", "2.2 | 大类专业基础限选课", "2.2.1 | 计算机学院模块"). The later 教学进程计划 repeats the rows and is skipped.
  *  - upc:   中国石油大学（华东） "六、课程设置": the Chinese name sits on its own line(s) above the code row, the English name below,
  *           vertical category labels are interleaved as fragments ("通识 | 思政", "教育 | 类课"). Category labels are not reconstructed;
- *           必修/选修 comes from the course code (8th character: 1 = 必修, 2 = 选修), the A–D direction letter goes to module.
+ *           必修/选修 from the table's own 类别 column (see parseUpc), the course code only as a cross-check.
  * Returned rows are table facts (core_in_section=false); the 核心课程 section is still extracted separately.
  */
 import type { ExtractedCourse } from './schema.js';
 import type { PageText } from './text.js';
 
 export type CodeTableLayout = 'hitwh' | 'upc';
-export interface CodeTable { layout: CodeTableLayout; courses: ExtractedCourse[] }
+export interface CodeTable { layout: CodeTableLayout; courses: ExtractedCourse[]; warnings: string[] }
 
 const HIT_CODE = /^\d{2}WH[A-Z]{2}\d{5,6}$/;
 const UPC_CODE = /^[A-Z]{3}\d{9}$/;
@@ -40,8 +40,9 @@ export function detectLayout(pages: PageText[]): CodeTableLayout | null {
 export function parseCodeTable(pages: PageText[]): CodeTable | null {
   const layout = detectLayout(pages);
   if (!layout) return null;
-  const courses = layout === 'hitwh' ? parseHitwh(linesOf(pages)) : parseUpc(linesOf(pages));
-  return courses.length ? { layout, courses } : null;
+  const warnings: string[] = [];
+  const courses = layout === 'hitwh' ? parseHitwh(linesOf(pages)) : parseUpc(linesOf(pages), warnings);
+  return courses.length ? { layout, courses, warnings } : null;
 }
 
 function parseHitwh(ls: Line[]): ExtractedCourse[] {
@@ -86,19 +87,40 @@ export function splitEnglish(cell: string): { han: string; en: string } {
 }
 const isProse = (c: string) => /[，；：。≥]|学分|修读/.test(c);
 
-function parseUpc(ls: Line[]): ExtractedCourse[] {
+type Kind = '必修' | '选修';
+const KIND = (c: string): Kind | null => (c === '必修' || c === '选修' ? c : null);
+
+/**
+ * UPC 课程类别/模块 columns are printed vertically ("专业 / 必修 / 课程"), once per block, so the text layer has the 必修/选修 word
+ * next to only one row of each block. Expert rule (2026-10-13): the column decides; the course code (8th char 1/2) is a cross-check.
+ *  - a row whose own record lines carry 必修/选修 takes it directly
+ *  - other rows take the label of the surrounding anchors; between a 必修 and a 选修 anchor the boundary is placed where the code flips
+ *  - rows before any anchor are the 通识/大类基础 blocks, which carry no 必修/选修 word (required) -> the next anchor (必修)
+ *  - a direct label that contradicts the code -> warning (label wins)
+ * 选修 -> 任选. The A–D 方向 letter ("建议从A软件架构、B网络规划…中选择一个方向") goes to module as a note, never 限选.
+ */
+function parseUpc(ls: Line[], warnings: string[]): ExtractedCourse[] {
   const start = ls.findIndex((l) => /^\s*[一二三四五六七八九十]+、\s*课程设置/.test(l.text));
   const end = ls.findIndex((l, i) => i > start && /^\s*[一二三四五六七八九十]+、/.test(l.text));
+  const region = ls.slice(Math.max(0, start + 1), end > 0 ? end : undefined);
+  const dirNames = new Map<string, string>();
+  const advice = region.map((l) => l.text).join('').replace(/\s+/g, '').match(/建议从(.+?)中选择/);
+  if (advice) for (const m of advice[1]!.matchAll(/([A-D])([^、，A-D]{2,10})/g)) dirNames.set(m[1]!, m[2]!);
   const out: ExtractedCourse[] = [];
+  const codes: string[] = [];
+  const own: (Kind | null)[] = [];
   let pending: string[] = [];
-  let last: ExtractedCourse | null = null; // the row whose English name has not been seen yet takes trailing name pieces
-  for (const l of ls.slice(Math.max(0, start + 1), end > 0 ? end : undefined)) {
+  let pendingKind: Kind | null = null;
+  let last: ExtractedCourse | null = null; // the row whose English name has not been seen yet takes trailing name pieces / labels
+  const labelOf = (c: string[]) => c.map(KIND).find(Boolean) ?? null;
+  for (const l of region) {
     const t = l.text.trim();
     if (!t || isHeader(t)) continue;
     const c = cellsOf(t);
     const ci = c.findIndex((x) => UPC_CODE.test(x));
     if (ci >= 0) {
       for (const x of c.slice(0, ci)) if (!isNoise(x) && !isProse(x)) pending.push(splitEnglish(x).han);
+      const kind = labelOf(c) ?? pendingKind;
       const rest = c.slice(ci + 1);
       const k = rest.findIndex((x) => NUM.test(x));
       const nums = k >= 0 ? rest.slice(k) : [];
@@ -107,21 +129,43 @@ function parseUpc(ls: Line[]): ExtractedCourse[] {
       const inline = pre.map((x) => x.han).filter((x) => x && !isNoise(x)).join('');
       const dir = nums.at(-1) && /^[A-D]$/.test(nums.at(-1)!) ? nums.at(-1)! : null;
       const name = inline || pending.slice(-2).join('');
-      pending = [];
+      pending = []; pendingKind = null;
       if (!name) { last = null; continue; }
       const sem = nums[7] && /^S?\d(-\d)?$/.test(nums[7]) ? nums[7] : null;
-      const r = row(name, { course_type: code[7] === '2' ? '任选' : code[7] === '1' ? '必修' : null, module: dir ? `${dir}方向` : null, credits: n(nums[0]), hours: n(nums[1]), semester: sem, page: l.page, snippet: t.slice(0, 80) });
-      out.push(r);
-      // a row whose English name is already on the code line is complete; otherwise CJK pieces until the English line continue its name
+      const r = row(name, { module: dir ? `${dir}${dirNames.get(dir) ?? ''}方向（建议）` : null, credits: n(nums[0]), hours: n(nums[1]), semester: sem, page: l.page, snippet: t.slice(0, 80) });
+      out.push(r); codes.push(code); own.push(kind);
+      // a row whose English name is already on the code line is complete; otherwise lines until the English line still belong to it
       last = pre.some((x) => x.en) ? null : r;
       continue;
     }
-    if (c.some(isEnglish)) { last = null; pending = []; continue; }
+    const kind = labelOf(c);
+    if (c.some(isEnglish)) { if (kind && last && own[out.length - 1] === null) own[out.length - 1] = kind; last = null; pending = []; pendingKind = null; continue; }
     const split = c.filter((x) => !isNoise(x)).map(splitEnglish);
     const pieces = split.map((x) => x.han).filter(Boolean);
-    if (pieces.some(isProse)) { pending = []; continue; }
-    if (last && pieces.length) { last.name += pieces.join(''); if (split.some((x) => x.en)) last = null; continue; } // name continued below the code row ("展史等四门课…）")
+    // prose (修读说明, "选修 | ≥10 | 1-8" credit rules) ends a name and its label: they describe a block without codes
+    if (pieces.some(isProse) || c.some((x) => x.startsWith('≥'))) { pending = []; pendingKind = null; continue; }
+    if (last) {
+      if (kind && own[out.length - 1] === null) own[out.length - 1] = kind;
+      if (pieces.length) { last.name += pieces.join(''); if (split.some((x) => x.en)) last = null; } // "展史等四门课…）"
+      continue;
+    }
+    if (kind) pendingKind = kind;
     pending.push(...pieces);
   }
+  // resolve every row's 必修/选修 from the anchors
+  const codeKind = (code: string): Kind | null => (code[7] === '1' ? '必修' : code[7] === '2' ? '选修' : null);
+  const anchors = own.map((k, i) => (k ? i : -1)).filter((i) => i >= 0);
+  out.forEach((r, i) => {
+    let kind = own[i];
+    if (!kind) {
+      const prev = [...anchors].reverse().find((a) => a < i);
+      const next = anchors.find((a) => a > i);
+      const p = prev !== undefined ? own[prev]! : null, q = next !== undefined ? own[next]! : null;
+      kind = p && q && p !== q ? (codeKind(codes[i]!) === q ? q : p) : p ?? q;
+    }
+    const ck = codeKind(codes[i]!);
+    if (kind && ck && kind !== ck) warnings.push(`${r.name} (${codes[i]}): 表内类别 ${kind}, 课程编码第8位提示 ${ck}`);
+    r.course_type = kind === '选修' ? '任选' : kind === '必修' ? '必修' : ck === '选修' ? '任选' : ck;
+  });
   return out;
 }

@@ -14,7 +14,7 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LlmSkillTagger, applyCourseListRule, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
+import { LlmSkillTagger, applyCourseListRule, toolTagStillValid, coreNameMatches, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
 import { CURRICULUM_RAW } from './fetch.js';
 import type { DocFormat } from './manifest.js';
 import { extractText } from './text.js';
@@ -76,9 +76,36 @@ export function classifyCoreNames(db: Database.Database): { checked: number; upd
 }
 export { CORE_NAME_VERSION };
 
+/**
+ * Post-step (no LLM), expert 2026-10-13: a 正文-listed core course whose name IS a 专业知识 skill (coreNameMatches, e.g. 数据库系统 /
+ * 数据库技术 / 数据库系统概论 -> 数据库原理) always carries that skill as 核心课名 0.8, even when the model did not tag it (or tagged
+ * the course before the skill existed). Rows: extraction_method 'pdf_parse', source 'rule:core-name'. Expert-rejected pairs are
+ * skipped; a rule row whose course is no longer core / no longer matches is removed unless reviewed. Idempotent.
+ */
+export function addCoreNameTags(db: Database.Database): { inserted: number; deleted: number } {
+  const skills = db.prepare("SELECT id, name FROM skill WHERE skill_type = '专业知识'").all() as { id: string; name: string }[];
+  const core = db.prepare(`SELECT DISTINCT c.id, c.name, mc.snippet FROM major_course mc JOIN course c ON c.id = mc.course_id
+    WHERE mc.is_core = 1 AND mc.review_status <> 'rejected'`).all() as { id: string; name: string; snippet: string | null }[];
+  const rejected = new Set((db.prepare("SELECT course_id || '|' || skill_id AS k FROM course_skill_rejected").all() as { k: string }[]).map((r) => r.k));
+  const ins = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, confidence, reviewed, rationale, source, model, tagged_at, evidence_quote, needs_review, review_reason, evidence_type, tag_rank)
+    VALUES (?, ?, ?, 'pdf_parse', NULL, 0, ?, 'rule:core-name', NULL, ?, ?, 0, NULL, '核心课名', NULL) ON CONFLICT (course_id, skill_id) DO NOTHING`);
+  const want = new Set<string>();
+  let inserted = 0;
+  const now = new Date().toISOString();
+  for (const c of core) for (const s of skills) {
+    if (!coreNameMatches(c.name, s.name) || rejected.has(`${c.id}|${s.id}`)) continue;
+    want.add(`${c.id}|${s.id}`);
+    inserted += ins.run(c.id, s.id, tagWeight('核心课名'), `正文核心课程，课程名即技能「${s.name}」（规则）`, now, c.name).changes;
+  }
+  let deleted = 0;
+  for (const r of db.prepare("SELECT rowid AS rid, course_id, skill_id FROM course_skill WHERE source = 'rule:core-name' AND reviewed = 0").all() as { rid: number; course_id: string; skill_id: string }[])
+    if (!want.has(`${r.course_id}|${r.skill_id}`)) deleted += db.prepare('DELETE FROM course_skill WHERE rowid = ?').run(r.rid).changes;
+  return { inserted, deleted };
+}
+
 interface CourseResult { tags: SkillTag[]; untagged: { is_core: boolean; reason: string } | null }
 
-export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name: { checked: number; updated: number; core_name: number } }
+export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name_added?: { inserted: number; deleted: number }; core_name: { checked: number; updated: number; core_name: number } }
 
 /**
  * Stability contract (expert, 2026-10-13):
@@ -95,9 +122,11 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     const t = tagger ?? new LlmSkillTagger(providerFromEnv(mockTagProvider(skills)), new SqliteLlmCache(db));
     const mock = t.name === 'mock';
     const sHash = skillTableHash(skills.map(({ tag_batch: _b, ...x }) => x));
-    // A cached result made with the batch-1 skill table stays valid after skills are ADDED (016): existing courses are not re-tagged
-    // just because e.g. 机械/电气 skills appeared. A rename/retype of a batch-1 skill still changes this hash and re-tags everything.
-    const sHashBatch1 = skillTableHash(skills.filter((x) => x.tag_batch === 1).map(({ tag_batch: _b, ...x }) => x));
+    // A cached result made with an earlier skill table (all skills of batch <= b) stays valid after skills are ADDED in a later batch
+    // (016, 017): existing courses are not re-tagged just because skills appeared. A rename/retype of an existing skill changes every
+    // one of these hashes and re-tags everything.
+    const batches = [...new Set(skills.map((x) => x.tag_batch))].sort((a, b) => a - b);
+    const priorHashes = batches.map((b) => skillTableHash(skills.filter((x) => x.tag_batch <= b).map(({ tag_batch: _b, ...x }) => x)));
     const rows = db.prepare(`SELECT mc.school_id, mc.major_code, c.id AS course_id, c.name, mc.course_type, mc.is_core, mc.table_block, COALESCE(mc.credits, c.credits) AS credits, mc.snippet, mc.curriculum_source_id,
         COALESCE(s.name, mc.school_id) AS school, COALESCE(m.name, mc.major_code) AS major
       FROM major_course mc JOIN course c ON c.id = mc.course_id LEFT JOIN school s ON s.id = mc.school_id LEFT JOIN major m ON m.code = mc.major_code
@@ -120,7 +149,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         const own = lines ? evidenceFor(lines, [c]).excerpt : (c.snippet ?? '');
         const key = courseTagKey(t.name, c.name, own, sHash, opts.rulesVersion);
         const hit = mock ? undefined : (getCache.get(c.course_id) as { tag_key: string; result_json: string } | undefined);
-        if (hit && (hit.tag_key === key || hit.tag_key === courseTagKey(t.name, c.name, own, sHashBatch1, opts.rulesVersion))) { results.set(c.course_id, { c, key, res: JSON.parse(hit.result_json) as CourseResult, fresh: false, model: '' }); sum.reused++; }
+        if (hit && (hit.tag_key === key || priorHashes.some((h) => hit.tag_key === courseTagKey(t.name, c.name, own, h, opts.rulesVersion)))) { results.set(c.course_id, { c, key, res: JSON.parse(hit.result_json) as CourseResult, fresh: false, model: '' }); sum.reused++; }
         else { todo.push(c); results.set(c.course_id, { c, key, res: { tags: [], untagged: null }, fresh: true, model: '' }); }
       }
       for (let i = 0; i < todo.length; i += BATCH) {
@@ -170,7 +199,8 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         const tagModel = (fresh ? model : (cur.find((x) => x.extraction_method === 'llm')?.model as string | undefined)) ?? model;
         const want = new Set<string>();
         const listNames = groupNames.get(c.course_id) ?? [];
-        res.tags.map((x) => applyCourseListRule(x, c.name, listNames, x.skill_id)).forEach((x, i) => {
+        // rules re-applied to every result, cached ones included: course-list quotes; tool tags need the tool in name/quote (017)
+        res.tags.filter((x) => toolTagStillValid(x.skill_id, c.name, x.evidence_quote)).map((x) => applyCourseListRule(x, c.name, listNames, x.skill_id)).forEach((x, i) => {
           if (locked.has(x.skill_id) || rejected.has(`${c.course_id}|${x.skill_id}`)) return;
           want.add(x.skill_id);
           const st = storedEvidenceType(x.evidence_type, coreCourse.has(c.course_id), c.name, skillName.get(x.skill_id) ?? '');
@@ -190,6 +220,11 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         .run(runId, t.name, `${TAG_RULES_VERSION}/${sHash.slice(0, 12)}`, now, new Date().toISOString(), sum.retagged);
     });
     write();
+    if (!mock) sum.core_name_added = db.transaction(() => {
+      const x = addCoreNameTags(db);
+      db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
+      return x;
+    })();
     sum.core_name = db.transaction(() => classifyCoreNames(db))();
     // counts reported from the DB (after rejections, locks and the course-list rule), not from the model's raw output
     const cnt = db.prepare('SELECT count(*) AS n, coalesce(sum(needs_review), 0) AS r FROM course_skill WHERE course_id = ?');
@@ -198,7 +233,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
       const k = mock ? { n: res.tags.length, r: res.tags.filter((x) => x.needs_review).length } : (cnt.get(c.course_id) as { n: number; r: number });
       sum.tags += k.n;
       sum.needs_review += k.r;
-      if (res.untagged) sum.untagged.push({ course_id: c.course_id, name: c.name, is_core: res.untagged.is_core, reason: res.untagged.reason });
+      if (res.untagged && k.n === 0) sum.untagged.push({ course_id: c.course_id, name: c.name, is_core: res.untagged.is_core, reason: res.untagged.reason });
     }
     return sum;
   } finally {
@@ -209,7 +244,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
 export async function main() {
   const s = await tagSkills();
   const coreUn = s.untagged.filter((u) => u.is_core);
-  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}; 核心课名 post-step v${CORE_NAME_VERSION}: ${s.core_name.core_name} 核心课名, ${s.core_name.updated} rows re-typed`);
+  console.log(`[career] skill tagger: ${s.tagger}${s.mock ? ' (MOCK — nothing written)' : ''}; ${s.groups} school×major groups, ${s.courses} courses (${s.retagged} sent to model, ${s.reused} unchanged/reused), ${s.tags} course_skill rows (${s.needs_review} needs_review), ${s.untagged.length} untagged${coreUn.length ? ` (${coreUn.length} 核心课!)` : ''}; ${s.llm_calls} calls, ${s.cached} cached, tokens ${s.prompt_tokens}+${s.completion_tokens}; course_skill +${s.rows_inserted} ~${s.rows_updated} -${s.rows_deleted}; 核心课名 rule tags +${s.core_name_added?.inserted ?? 0} -${s.core_name_added?.deleted ?? 0}; 核心课名 post-step v${CORE_NAME_VERSION}: ${s.core_name.core_name} 核心课名, ${s.core_name.updated} rows re-typed`);
   for (const u of s.untagged) console.log(`[career]   untagged${u.is_core ? ' [核心课]' : ''}: ${u.name} — ${u.reason}`);
   for (const e of s.errors) console.warn(`[career]   ${e}`);
 }

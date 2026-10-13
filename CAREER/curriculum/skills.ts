@@ -36,7 +36,7 @@ export const tagWeight = (t: StoredEvidenceType) => EVIDENCE_WEIGHT[t];
  * Runs as a post-step over stored course_skill rows (no LLM call, does not change which skills are tagged, not part of the
  * per-course tagging cache key). Bump CORE_NAME_VERSION when the rule changes.
  */
-export const CORE_NAME_VERSION = 1;
+export const CORE_NAME_VERSION = 2; // v2 (2026-10-13): 技术/概论 also stripped (数据库系统/数据库技术/数据库系统概论 = 数据库原理)
 export const CORE_NAME_MAP: Record<string, string> = {
   '操作系统': '操作系统原理',
   '编译原理': '编译原理',
@@ -47,7 +47,7 @@ export const CORE_NAME_MAP: Record<string, string> = {
   '计算机组成与系统结构': '计算机组成与体系结构',
   '计算机组成原理': '计算机组成与体系结构',
 };
-export const CORE_NAME_STRIP = ['与体系结构', '与系统结构', '体系结构', '原理', '方法', '协议', '系统'];
+export const CORE_NAME_STRIP = ['与体系结构', '与系统结构', '体系结构', '原理', '方法', '协议', '系统', '技术', '概论'];
 const coreNorm = (s: string) => {
   let x = normQuote(s).replace(/[（(][^）)]*[）)]$/, '');
   for (let changed = true; changed;) { changed = false; for (const suf of CORE_NAME_STRIP) if (x.length > suf.length + 1 && x.endsWith(suf)) { x = x.slice(0, -suf.length); changed = true; } }
@@ -74,7 +74,7 @@ export const TOOL_NAME_LITERAL: Record<string, RegExp> = {
   'software.backend': /后端/i,
   'data.bigdata-platform': /Hadoop|Spark/i,
   'data.bi-tools': /商业智能|Tableau|Power ?BI/i,
-  'hardware.fpga': /FPGA|Verilog|VHDL/i,
+  'hardware.fpga': /FPGA/i, // expert 2026-10-13: Verilog/VHDL is its own skill, no cross-triggering
   'ai.llm-apps': /大模型|大语言模型|LLM/i,
   // batch 2 (016)
   'hardware.pcb': /PCB|Altium|印制电路板/i,
@@ -86,7 +86,7 @@ export const TOOL_NAME_LITERAL: Record<string, RegExp> = {
   'foundation.matlab': /MATLAB/i,
 };
 export const TOOL_NAME_WHITELIST: Record<string, string[]> = {
-  '数据库系统': ['software.db-sql'], // approved by the expert 2026-10-13
+  // (empty) the 数据库系统 -> 数据库与SQL exception was withdrawn by the expert 2026-10-13 (017): 数据库 courses get 数据库原理
 };
 
 /** Table-row noise: course codes, numbers, separators and the usual column words (学分/学时/考试…). */
@@ -148,6 +148,15 @@ export interface SkillTagger {
 /** core = listed in the 正文 核心课程 section only (expert rule, 009) */
 export const isCore = (c: CourseForTagging) => c.is_core === 1;
 
+/** Tool rule re-checked on stored/cached tags (the cache may hold results validated under older rules): a 工具与技术 tag survives
+ *  only when the tool is literally in the course name or the quote names it (and is more than course names). */
+export function toolTagStillValid(skillId: string, courseName: string, quote: string | null): boolean {
+  const term = TOOL_TERMS[skillId];
+  if (!term) return true;
+  if (TOOL_NAME_LITERAL[skillId]?.test(courseName)) return true;
+  return !!quote && term.test(quote) && !quoteIsNameOnly(quote, courseName);
+}
+
 export const HEDGE = /可能|常用|一般|通常|或许|大概/;
 /** whitespace- and table-separator-insensitive form used to check that a quote really occurs in the source text */
 export const normQuote = (s: string) => s.replace(/[\s|｜\u00a0]+/g, '');
@@ -156,13 +165,13 @@ export const TOOL_TERMS: Record<string, RegExp> = {
   'software.c-cpp': /C语言|C\+\+|C\/C\+\+|(^|[^A-Za-z])C程序/i,
   'software.java': /Java/i,
   'software.python': /Python/i,
-  'software.db-sql': /数据库|SQL/i,
+  'software.db-sql': /SQL/i, // pure tool: only an explicit SQL (数据库 courses -> 数据库原理, 专业知识)
   'software.linux': /Linux/i,
   'software.web-frontend': /Web|前端|HTML|JavaScript/i,
   'software.backend': /后端|服务端|Web/i,
   'data.bigdata-platform': /Hadoop|Spark|大数据平台/i,
   'data.bi-tools': /商业智能|\bBI\b|Tableau|Power ?BI/i,
-  'hardware.fpga': /FPGA|硬件描述语言|Verilog|VHDL/i,
+  'hardware.fpga': /FPGA/i,
   'ai.llm-apps': /大模型|大语言模型|LLM|GPT/i,
   // batch 2 (016): only when the text names the tool
   'hardware.pcb': /PCB|Altium|印制电路板/i,
@@ -187,11 +196,11 @@ export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[]
         '规则：1) skill_id 只能取自技能清单中的 id，不得自造；',
         `2) 每门课挂 0~${MAX_SKILLS_PER_COURSE} 个技能，按相关度从高到低排列，只挂这门课的主要教学内容；不要凭常识推测课程“会用到”什么；`,
         '3) 课程名本身就是证据：课程名直接对应某个知识类技能时（如“操作系统”→操作系统原理、“机器学习（双语）”→机器学习、“密码学引论”→密码学、“信息安全导论”→信息安全基础+密码学、“大数据管理与分析”→数据清洗与处理），应当挂上，quote 用原文中包含该课程名的那一行；',
-        '4) 标 [工具] 的技能（编程语言、数据库与SQL、Linux、FPGA 等）只有当原文明确写出该工具/语言时才能挂（大数据平台也不例外：原文没写 Hadoop/Spark/大数据平台就不挂，课程名含“大数据”也不行；例如出现 FPGA、Verilog、硬件描述语言才可挂 FPGA；出现 Python 才可挂 Python；课程名含“数据库”可挂数据库与SQL）；不得因为课程“通常会用到”而挂；',
+        '4) 标 [工具] 的技能（编程语言、数据库与SQL、Linux、FPGA 等）只有当原文明确写出该工具/语言时才能挂（大数据平台也不例外：原文没写 Hadoop/Spark/大数据平台就不挂，课程名含“大数据”也不行；例如出现 FPGA 才可挂 FPGA；出现 Verilog、VHDL、硬件描述语言才可挂 Verilog/VHDL；出现 Python 才可挂 Python；出现 SQL 才可挂数据库与SQL，课程名含“数据库”不算——数据库类课程挂知识技能“数据库原理”）；不得因为课程“通常会用到”而挂；',
         '5) 每个技能必须附 quote：从【原文】中逐字复制的一段文字（≤60字），不得改写、拼接或补字；rationale 一句话（≤40字），不要用“可能/常用/一般/通常/或许/大概”等推测性措辞；',
         '6) 只挂课程名或原文直接说明的内容，不要扩展到相邻领域（如“计算机图形学”不挂计算机视觉，“人工智能引论”原文没写深度学习/自然语言处理就只挂机器学习）；思政、英语、体育、军事、劳动、通识、创新创业、实习、毕业论文、综合实践/成果展示等环节，原文没写具体技术内容时 skills 返回空数组并在 reason 说明，绝不硬挂；',
         '7) 每门课都必须出现在输出中，course 字段逐字使用给定课程名；',
-        `8) 每个技能标 evidence_type：原文除课程名（及表格行里的课程号、学分、学时等）之外还写了相关内容 → "原文明确"；只凭课程名 → "课名推断"。课名推断只用于明确的情况：课程名直接包含技能名，或是该领域的标准导论课；最多 ${MAX_NAME_INFERRED} 个，且只能是知识类技能（[工具] 一律不能推断）；“计算概论”这类名字宽泛、各校内容差别大的课宁可不挂。注意：原文只列出课程名、没有课程简介，不是不挂的理由——专业课的课程名直接对应某个知识类技能时，必须按课名推断挂上（例：“计算机系统导论”→计算机组成与体系结构+操作系统原理，“嵌入式系统原理与应用”→嵌入式硬件，“汇编语言”→计算机组成与体系结构）；课程名里直接写出工具（如“数据库系统”含“数据库”）时，该工具技能算原文明确；`,
+        `8) 每个技能标 evidence_type：原文除课程名（及表格行里的课程号、学分、学时等）之外还写了相关内容 → "原文明确"；只凭课程名 → "课名推断"。课名推断只用于明确的情况：课程名直接包含技能名，或是该领域的标准导论课；最多 ${MAX_NAME_INFERRED} 个，且只能是知识类技能（[工具] 一律不能推断）；“计算概论”这类名字宽泛、各校内容差别大的课宁可不挂。注意：原文只列出课程名、没有课程简介，不是不挂的理由——专业课的课程名直接对应某个知识类技能时，必须按课名推断挂上（例：“计算机系统导论”→计算机组成与体系结构+操作系统原理，“嵌入式系统原理与应用”→嵌入式硬件，“汇编语言”→计算机组成与体系结构）；课程名里直接写出工具名（如“Python程序设计”含“Python”）时，该工具技能算原文明确；`,
         '9) 只输出 JSON，格式：{"courses":[{"course":string,"skills":[{"skill_id":string,"evidence_type":"原文明确"|"课名推断","quote":string,"rationale":string}],"reason":string|null}]}',
         '',
         '【技能清单】',

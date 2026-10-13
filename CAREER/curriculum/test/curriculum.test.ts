@@ -265,7 +265,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.ok(s.tags >= 1);
   const db2 = new Database(process.env.CAREER_DB!);
   assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
-  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 93); // 38 + 55 batch-2 skills (016)
+  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 94); // 38 + 55 batch-2 (016) + 数据库原理 (017)
   db2.close();
 });
 
@@ -344,7 +344,7 @@ test('evidence_type: name-only quote -> 课名推断 (max 2, knowledge skills on
   assert.deepEqual(of('0').map((t) => [t.skill_id, t.evidence_type]), [['network-sec.infosec-basics', '课名推断'], ['network-sec.crypto', '课名推断']], 'model claim downgraded; max 2');
   assert.equal(p.droppedNameInferred, 1);
   assert.equal(of('1').length, 0, 'tool never inferred');
-  assert.equal(of('2')[0]?.evidence_type, '原文明确', 'tool literally in the course name counts as named');
+  assert.equal(of('2').length, 0, '017: 数据库系统 no longer names the SQL tool (whitelist withdrawn)');
   assert.equal(of('3')[0]?.evidence_type, '原文明确');
 });
 
@@ -392,7 +392,7 @@ test('tagging stability: per-course cache, re-run is a no-op, reviewed rows surv
   d2.close();
 });
 
-test('核心课名: deterministic, conservative; tools only when literally named (数据库系统 whitelisted)', async () => {
+test('核心课名: deterministic, conservative; tools only when literally named', async () => {
   const { coreNameMatches, storedEvidenceType, parseTagResponse, EVIDENCE_WEIGHT } = await import('../skills.js');
   assert.deepEqual(EVIDENCE_WEIGHT, { '原文明确': 1.0, '核心课名': 0.8, '课名推断': 0.5 });
   for (const [c, s] of [['操作系统', '操作系统原理'], ['编译原理', '编译原理'], ['数据结构与算法', '数据结构与算法'], ['软件工程', '软件工程方法'], ['离散数学', '离散数学'], ['计算机网络', '计算机网络协议'], ['计算机组成与系统结构', '计算机组成与体系结构'], ['机器学习（双语）', '机器学习']])
@@ -416,7 +416,7 @@ test('核心课名: deterministic, conservative; tools only when literally named
   const of = (c: string) => p.tags.find((t) => t.course_id === c)?.evidence_type;
   assert.equal(of('0'), '原文明确');
   assert.equal(of('1'), undefined, '数据库原理: tool not literally named -> dropped');
-  assert.equal(of('2'), '原文明确', 'whitelist');
+  assert.equal(of('2'), undefined, '017: whitelist withdrawn, 数据库与SQL needs an explicit SQL');
   assert.equal(of('3'), '原文明确');
 });
 
@@ -601,7 +601,9 @@ test('code tables parsed without LLM: 哈工大（威海） numbered blocks, 中
   const names = u.courses.map((c) => c.name).filter((n) => !n.startsWith('体育'));
   assert.deepEqual(names, ['毛泽东思想和中国特色社会主义理论体系概论', '习近平新时代中国特色社会主义思想概论', '离散数学（2-1）', '数据结构', '面向对象程序设计（Java）', '具身智能技术']);
   const oop = u.courses.find((c) => c.name.startsWith('面向对象'))!;
-  assert.deepEqual([oop.course_type, oop.module, oop.credits, oop.hours], ['任选', 'A方向', 3, 56]);
+  // the column label (必修 on the English line) wins over the code (8th char 2); the mismatch is reported
+  assert.deepEqual([oop.course_type, oop.module, oop.credits, oop.hours], ['必修', 'A方向（建议）', 3, 56]);
+  assert.equal(u.warnings.length, 2, String(u.warnings)); assert.ok(u.warnings.some((w) => /面向对象/.test(w)));
   assert.equal(u.courses.find((c) => c.name === '离散数学（2-1）')!.course_type, '必修');
   assert.deepEqual(splitEnglish('数据结构Data Structure'), { han: '数据结构', en: 'Data Structure' });
   assert.deepEqual(splitEnglish('数据分析（Python）'), { han: '数据分析（Python）', en: '' });
@@ -685,8 +687,8 @@ test('016 batch-2 skills: types, no duplicates, aliases; adding skills does not 
   db.pragma('foreign_keys = OFF');
   db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES ('s:操作系统', 's', '操作系统', 'u', 'llm')").run();
   db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, snippet) VALUES ('s', '080901', 's:操作系统', 'u', 'llm', '必修', 0, 'x | 操作系统 | 3')").run();
-  db.prepare("CREATE TABLE skill_b2 AS SELECT * FROM skill WHERE tag_batch = 2").run();
-  db.prepare("DELETE FROM skill WHERE tag_batch = 2").run();
+  db.prepare("CREATE TABLE skill_b2 AS SELECT * FROM skill WHERE tag_batch >= 2").run();
+  db.prepare("DELETE FROM skill WHERE tag_batch >= 2").run();
   db.close();
   let calls = 0;
   const provider = { model: 'stub', isMock: false, async chat() { calls++; return { model: 'stub', text: JSON.stringify({ courses: [{ course: '操作系统', reason: null, skills: [{ skill_id: 'software.os', evidence_type: '课名推断', quote: 'x | 操作系统 | 3', rationale: 'r' }] }] }) }; } };
@@ -698,4 +700,73 @@ test('016 batch-2 skills: types, no duplicates, aliases; adding skills does not 
   const d3 = new Database(dbPath); d3.prepare("UPDATE skill SET name = '操作系统' WHERE id = 'software.os'").run(); d3.close();
   await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
   assert.equal(calls, 2, 'renaming a batch-1 skill still re-tags');
+});
+
+test('017 rulings: UPC 必修/选修 from the table column (code = cross-check), tools need their own term, 数据库原理 via the core-name rule', async () => {
+  const { parseCodeTable } = await import('../codetable.js');
+  const { toolTagStillValid, coreNameMatches, TOOL_NAME_WHITELIST } = await import('../skills.js');
+  const { typeFromBlock } = await import('../extract.js');
+  const fill = Array.from({ length: 14 }, (_, i) => `体育（4-${i}）\nUPE11011410${i % 10} | 1 | 32 | 0 | 0 | 0 | 32 | 0 | 1\nPhysical Education`).join('\n');
+  const t = parseCodeTable([{ page: 1, text: `六、课程设置\n${fill}\n编译原理\n必修 | CST220411025 | 2.5 | 40 | 40 | 0 | 0 | 0 | 40 | 5\nCompilation Principle\n软件工程\nCST310221020 | 2 | 32 | 32 | 0 | 0 | 0 | 32 | 5\nSoftware Engineering\n算法分析与设计\n选修 | CST226011020 | 2 | 36 | 24 | 0 | 12 | 0 | 0 | 4 | A\nAlgorithm Analysis and Design\n2. 建议从A软件架构、B网络规划中选择一个方向\n七、` }])!;
+  const by = new Map(t.courses.map((c) => [c.name, c]));
+  assert.equal(by.get('编译原理')!.course_type, '必修');
+  assert.equal(by.get('算法分析与设计')!.course_type, '任选', 'column says 选修 although the code says 1');
+  assert.equal(by.get('算法分析与设计')!.module, 'A软件架构方向（建议）');
+  assert.equal(by.get('软件工程')!.course_type, '任选', 'between a 必修 and a 选修 anchor the code (2) places the boundary');
+  assert.equal(by.get('体育（4-0）')!.course_type, '必修', 'rows before the first anchor: 通识/大类 blocks -> next anchor');
+  assert.equal(t.warnings.length, 1); assert.match(t.warnings[0]!, /算法分析与设计/);
+  assert.equal(toolTagStillValid('hardware.fpga', '数字系统设计', '采用Verilog完成设计'), false);
+  assert.equal(toolTagStillValid('semiconductor.hdl', '数字系统设计', '采用Verilog完成设计'), true);
+  assert.equal(toolTagStillValid('hardware.fpga', 'FPGA设计', null), true);
+  assert.equal(toolTagStillValid('software.db-sql', '数据库系统', 'sd03 | 数据库系统 | 4'), false);
+  assert.equal(toolTagStillValid('software.db-sql', '数据库系统', '数据库系统：讲授SQL查询与事务'), true);
+  assert.deepEqual(TOOL_NAME_WHITELIST, {});
+  for (const n of ['数据库原理', '数据库系统', '数据库技术', '数据库系统概论', '数据库系统(双语)']) assert.ok(coreNameMatches(n, '数据库原理'), n);
+  assert.ok(!coreNameMatches('数据库课程设计', '数据库原理'));
+  assert.ok(coreNameMatches('操作系统', '操作系统原理'));
+  assert.equal(typeFromBlock('大学 英语 课题 组', null), '限选');
+});
+
+test('017 migration + core-name rule tags: SDU exception -> 数据库原理 核心课名 (reviewed kept), unsupported tool tags removed, UPC 数据库原理 tagged', async () => {
+  const { tagSkills } = await import('../tag.js');
+  const { LlmSkillTagger } = await import('../skills.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'm017.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = OFF');
+  for (const [id, n, core] of [['sdu:数据库系统', '数据库系统', 1], ['upc:数据库原理', '数据库原理', 1], ['x:数字系统', '数字系统', 0], ['x:SQL实践', '数据库SQL实践', 0]] as const) {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 's', ?, 'u', 'llm')").run(id, n);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, snippet) VALUES ('s', '080901', ?, 'u', 'llm', '必修', ?, ?)").run(id, core, `x | ${n} | 3`);
+  }
+  const add = (c: string, s: string, rev: number, q: string, t = '原文明确') => db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, evidence_type, evidence_quote) VALUES (?, ?, 1, 'llm', ?, ?, ?)").run(c, s, rev, t, q);
+  add('sdu:数据库系统', 'software.db-sql', 1, 'x | 数据库系统 | 3');
+  add('x:数字系统', 'hardware.fpga', 0, '使用Verilog设计');
+  add('x:数字系统', 'semiconductor.hdl', 1, '使用Verilog设计');
+  add('x:SQL实践', 'software.db-sql', 0, 'x | 数据库SQL实践 | 3');
+  db.prepare("DELETE FROM schema_migrations WHERE version = '017'").run();
+  db.close();
+  migrate(dbPath, () => {}); migrate(dbPath, () => {});
+  const d = new Database(dbPath);
+  const rows = () => d.prepare('SELECT course_id, skill_id, evidence_type, weight, reviewed, needs_review FROM course_skill ORDER BY 1, 2').all();
+  assert.deepEqual(rows(), [
+    { course_id: 'sdu:数据库系统', skill_id: 'software.db-principles', evidence_type: '核心课名', weight: 0.8, reviewed: 1, needs_review: 0 },
+    { course_id: 'x:SQL实践', skill_id: 'software.db-sql', evidence_type: '原文明确', weight: 1, reviewed: 0, needs_review: 0 },
+    { course_id: 'x:数字系统', skill_id: 'semiconductor.hdl', evidence_type: '原文明确', weight: 1, reviewed: 1, needs_review: 0 },
+  ]);
+  d.close();
+  // tagging run (stub model, untagged answer): the rule adds 数据库原理 to the core UPC course, deterministically and idempotently
+  const provider = { model: 'stub', isMock: false, async chat(m: { content: string }[]) {
+    const names = m[m.length - 1]!.content.split('\n').filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/^\d+\. /, '').split('｜')[0]!);
+    return { model: 'stub', text: JSON.stringify({ courses: names.map((n) => ({ course: n, reason: '实践课', skills: [] })) }) };
+  } };
+  const s1 = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(s1.core_name_added!.inserted, 1);
+  const s2 = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.deepEqual(s2.core_name_added, { inserted: 0, deleted: 0 });
+  const d2 = new Database(dbPath);
+  assert.deepEqual(d2.prepare("SELECT evidence_type, weight, source FROM course_skill WHERE course_id = 'upc:数据库原理'").all(), [{ evidence_type: '核心课名', weight: 0.8, source: 'rule:core-name' }]);
+  assert.equal((d2.prepare("SELECT count(*) n FROM course_skill_untagged WHERE course_id = 'upc:数据库原理'").get() as { n: number }).n, 0);
+  d2.close();
 });
