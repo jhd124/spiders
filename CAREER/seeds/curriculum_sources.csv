@@ -1,2 +1,9 @@
 school,major_code,grade_year,url,format,verified_by,notes
 山东大学,080901,2024级,https://www.cs.sdu.edu.cn/system/_content/download.jsp?owner=1470795559&urltype=news.DownloadAttachUrl&wbfileid=16487392,pdf,国内教育行业专家,"计算机科学与技术专业培养方案（2024版），学院页 https://www.cs.sdu.edu.cn/info/1067/6576.htm；服务器返回 application/octet-stream，格式按 %PDF 文件头识别"
+山东大学,080902,2024级,https://www.sc.sdu.edu.cn/info/1018/5613.htm,html,国内教育行业专家,"软件工程专业培养方案（2024版），软件学院网页正文；含“四、核心课程设置”和“九、课程设置及学时分配表”"
+中国石油大学（华东）,080901,2025级,https://cie.upc.edu.cn/15-2.qingdaoruanjianxueyuanjisuanjikexueyujishuxueyuan-jisuanjikexueyujishupeiyangfangan.pdf,pdf,国内教育行业专家,"计算机科学与技术专业培养方案（青岛软件学院、计算机科学与技术学院）；核心课=“三、主干学科、专业核心课程”中的专业核心课程"
+中国石油大学（华东）,080902,2025级,https://cie.upc.edu.cn/15-3.qingdaoruanjianxueyuanjisuanjikexueyujishuxueyuan-ruanjiangongchengpeiyangfangan.pdf,pdf,国内教育行业专家,"软件工程专业培养方案（青岛软件学院、计算机科学与技术学院）；核心课=专业核心课程"
+中国石油大学（华东）,080717T,2025级,https://cie.upc.edu.cn/15-5.qingdaoruanjianxueyuanjisuanjikexueyujishuxueyuan-rengongzhinengpeiyangfangan.pdf,pdf,国内教育行业专家,"人工智能专业培养方案（青岛软件学院、计算机科学与技术学院）；核心课=专业核心课程"
+哈尔滨工业大学（威海）,080901,2024级,https://cst.hitwh.edu.cn/_upload/article/files/73/3d/6e1fa6bf4b97abaf4ffd83d2d0c7/fab9d8b8-dd2f-4578-8f16-2899143dfb15.pdf,pdf,国内教育行业专家,"2023级同样适用；“四、专业基础课程和专业核心课程”中只有专业核心课程算核心，专业基础课程不算"
+哈尔滨工业大学（威海）,080902,2024级,https://cst.hitwh.edu.cn/_upload/article/files/bb/d8/2edde5ad467e967d1872e27f434f/63ec52b1-1d33-4df4-9ae9-13c79bfd3ad4.pdf,pdf,国内教育行业专家,"2023级同样适用；只有专业核心课程算核心，专业基础课程不算"
+哈尔滨工业大学（威海）,080717T,2024级,https://cst.hitwh.edu.cn/_upload/article/files/81/a3/caf3e94348518c25ec4ed54ece7b/b1679770-3741-4f72-8218-1488bba75305.pdf,pdf,国内教育行业专家,"2023级同样适用；只有专业核心课程算核心，专业基础课程不算；PDF 字体有告警（glyf），文本抽取正常"

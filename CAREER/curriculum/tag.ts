@@ -184,10 +184,13 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     });
     write();
     sum.core_name = db.transaction(() => classifyCoreNames(db))();
+    // counts reported from the DB (after rejections, locks and the course-list rule), not from the model's raw output
+    const cnt = db.prepare('SELECT count(*) AS n, coalesce(sum(needs_review), 0) AS r FROM course_skill WHERE course_id = ?');
     for (const { c, res } of results.values()) {
       sum.courses++;
-      sum.tags += res.tags.length;
-      sum.needs_review += res.tags.filter((x) => x.needs_review).length;
+      const k = mock ? { n: res.tags.length, r: res.tags.filter((x) => x.needs_review).length } : (cnt.get(c.course_id) as { n: number; r: number });
+      sum.tags += k.n;
+      sum.needs_review += k.r;
       if (res.untagged) sum.untagged.push({ course_id: c.course_id, name: c.name, is_core: res.untagged.is_core, reason: res.untagged.reason });
     }
     return sum;

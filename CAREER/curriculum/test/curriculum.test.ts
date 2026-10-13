@@ -538,3 +538,43 @@ test('014: expert rejections stick (no LLM, idempotent, cache cannot recreate); 
   assert.deepEqual(rows().map((r: any) => `${r.name}:${r.skill_id}`), ['信息检索与数据挖掘:ai.ml', '操作系统:software.os']);
   d.close();
 });
+
+test('HTML: sniffed by bytes, gbk meta honoured, article body only, tables kept as | rows, segmented like PDF', async () => {
+  const { sniffFormat, looksLike } = await import('../fetch.js');
+  const { extractText } = await import('../text.js');
+  const { planChunks } = await import('../extract.js');
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><nav>首页 学院简介</nav><form name="f"><div id="vsb_content">
+    <p>软件工程专业培养方案（2024版）</p><p>${'本专业培养软件工程人才。'.repeat(20)}</p>
+    <p><span>四</span><span>、</span><span>核心课程设置</span></p><p>本专业必修核心课程包括数据结构、操作系统、软件工程等。</p>
+    <p>五、主要实践性教学环节</p><p>九、软件工程专业课程设置及学时分配表</p><p>（一）专业培养计划--专业教育课程</p>
+    <table><tr><td>课程类别</td><td>课程号</td><td>课 程 名 称</td><td>学分</td></tr>
+    <tr><td>专业核心课程</td><td>sd01</td><td>数据结构</td><td>4</td></tr><tr><td>sd02</td><td>操作系统</td><td>4</td></tr><tr><td>应修小计</td><td>8</td></tr></table>
+    </div></form><footer>版权所有</footer></body></html>`;
+  const b = new TextEncoder().encode(html);
+  assert.equal(sniffFormat(b), 'html'); assert.ok(looksLike('html', b));
+  assert.equal(sniffFormat(new TextEncoder().encode('%PDF-1.7 ...')), 'pdf'); assert.equal(looksLike('html', new TextEncoder().encode('%PDF-1.7')), false);
+  assert.equal(sniffFormat(new Uint8Array([0x50, 0x4b, 3, 4])), 'docx');
+  const [p] = await extractText(b, 'html');
+  assert.doesNotMatch(p!.text, /首页|版权所有/);
+  assert.match(p!.text, /^四、核心课程设置$/m);
+  assert.match(p!.text, /^专业核心课程 \| sd01 \| 数据结构 \| 4$/m);
+  const units = planChunks([p!]);
+  assert.equal(units[0]!.kind, 'core_section');
+  assert.ok(units.some((u) => u.kind === 'table_block' && u.text.includes('sd02 | 操作系统 | 4')));
+  const gbk = Buffer.concat([Buffer.from('<html><head><meta http-equiv="Content-Type" content="text/html; charset=gb2312"></head><body><p>'), Buffer.from([0xba, 0xcb, 0xd0, 0xc4]), Buffer.from('</p></body></html>')]);
+  assert.equal((await extractText(new Uint8Array(gbk), 'html'))[0]!.text, '核心');
+});
+
+test('core section: only 核心课程 counts (专业基础课程 / 主干学科 sub-lists are cut; 主干学科 heading is not core)', async () => {
+  const { findCoreSection } = await import('../tables.js');
+  const hit = [{ page: 2, text: '三、主干学科\n计算机科学与技术\n四、专业基础课程和专业核心课程\n专业基础课程：高级语言程序设计I、数据结构与算法、\n计算机网络、操作系统。\n专业核心课程：计算机体系结构、计算系统设计与实现、处理器设计\n与实践。\n五、修业年限' }];
+  const c = findCoreSection(hit)!;
+  assert.match(c.text, /计算机体系结构/); assert.match(c.text, /与实践/);
+  assert.doesNotMatch(c.text, /数据结构与算法|操作系统|主干学科\n/);
+  const upc = [{ page: 1, text: '三、主干学科、专业核心课程\n主干学科：计算机科学与技术\n专业核心课程：计算机网络原理，数据库原理，\n数据结构\n四、特色课程' }];
+  const u = findCoreSection(upc)!.text;
+  assert.doesNotMatch(u, /主干学科：/); assert.match(u, /数据库原理/); assert.match(u, /数据结构/);
+  assert.equal(findCoreSection([{ page: 1, text: '三、主干学科\n计算机科学与技术\n四、毕业要求' }]), null);
+  const sdu = [{ page: 1, text: '四、核心课程设置\n本专业必修核心课程包括数据结构、操作系统等。\n五、实践' }];
+  assert.equal(findCoreSection(sdu)!.text, '四、核心课程设置\n本专业必修核心课程包括数据结构、操作系统等。');
+});

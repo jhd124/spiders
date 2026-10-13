@@ -19,7 +19,7 @@ export interface TableBlock {
 }
 
 const HEADING = /^\s*[一二三四五六七八九十]+、/;
-const CORE_HEADING = /^\s*[一二三四五六七八九十]+、\s*(专业)?(核心课程|主干课程|主干学科|核心课|学位课)/;
+const CORE_HEADING = /^\s*[一二三四五六七八九十]+、.{0,12}?(核心课程|主干课程|核心课|学位课)/;
 const TABLE_START = /课程设置及学时分配表|课程设置与学时分配表|教学进程(计划)?表|课程设置一览表/;
 const TABLE_TITLE = /^\s*[（(][一二三四五六七八九十]+[）)]/;
 const isFragment = (l: string) => !l.includes('|') && /^[\p{Script=Han}]{1,6}$/u.test(l.trim());
@@ -30,13 +30,32 @@ export const isCourseRow = (l: string) => l.includes('|') && /(^|\|)\s*\d+(\.\d+
 interface Line { page: number; text: string }
 const linesOf = (pages: PageText[]): Line[] => pages.flatMap((p) => p.text.split('\n').map((text) => ({ page: p.page, text })));
 
+/** a sub-list label inside a section: "专业基础课程：…", "主干学科：…", "专业核心课程：…" */
+const SUB_LABEL = /^\s*([\p{Script=Han}（）()]{2,16})[:：]/u;
+/**
+ * Expert rule: only the 核心课程 list is core. A heading that names 核心课程 wins over 主干课程/学位课 headings (主干学科 lists
+ * disciplines, never courses). When the section holds labeled sub-lists ("专业基础课程：… 专业核心课程：…", "主干学科：… 专业核心课程：…"),
+ * only the sub-lists whose label contains 核心 are kept (the heading line stays for context).
+ */
 export function findCoreSection(pages: PageText[]): { page: number; text: string } | null {
   const ls = linesOf(pages);
-  const i = ls.findIndex((l) => CORE_HEADING.test(l.text));
+  let i = ls.findIndex((l) => CORE_HEADING.test(l.text) && /核心/.test(l.text));
+  if (i < 0) i = ls.findIndex((l) => CORE_HEADING.test(l.text) && !/^\s*[一二三四五六七八九十]+、\s*主干学科\s*$/.test(l.text));
   if (i < 0) return null;
-  const out: string[] = [ls[i]!.text];
-  for (let j = i + 1; j < ls.length && !HEADING.test(ls[j]!.text) && out.length < 40; j++) out.push(ls[j]!.text);
-  return { page: ls[i]!.page, text: out.join('\n') };
+  const body: string[] = [];
+  for (let j = i + 1; j < ls.length && !HEADING.test(ls[j]!.text) && body.length < 40; j++) body.push(ls[j]!.text);
+  const labeled = body.filter((l) => SUB_LABEL.test(l) && /课程|学科|课/.test(l.match(SUB_LABEL)![1]!));
+  let kept = body;
+  if (labeled.length && labeled.some((l) => /核心/.test(l.match(SUB_LABEL)![1]!))) {
+    kept = [];
+    let keep = false;
+    for (const l of body) {
+      const m = l.match(SUB_LABEL);
+      if (m && /课程|学科|课/.test(m[1]!)) keep = /核心/.test(m[1]!);
+      if (keep) kept.push(l);
+    }
+  }
+  return { page: ls[i]!.page, text: [ls[i]!.text, ...kept].join('\n') };
 }
 
 export function segmentTableBlocks(pages: PageText[]): TableBlock[] {

@@ -102,7 +102,7 @@ export function buildMessages(ctx: { school: string; majorCode: string; majorNam
   return [
     {
       role: 'system',
-      content: ['你是高校培养方案信息抽取助手。只依据给定文本，抽取该专业的课程（课程表中的课程，以及“核心课程/主干课程”段落中列出的课程）。', '段落中列为核心课程/主干课程的 core_in_section=true；block 填文本中写明的课程类别，course_type 填 必修/限选/任选 或 null。', ...COMMON_RULES].join('\n'),
+      content: ['你是高校培养方案信息抽取助手。只依据给定文本，抽取该专业的课程（课程表中的课程，以及“核心课程/主干课程”段落中列出的课程）。', '只有“核心课程”段落（如“专业核心课程：…”）中列出的课程 core_in_section=true；“专业基础课程”“主干学科”“学科基础课”等列表不是核心课程，core_in_section=false；block 填文本中写明的课程类别，course_type 填 必修/限选/任选 或 null。', ...COMMON_RULES].join('\n'),
     },
     { role: 'user', content: `${who}\n\n文本：\n${unit.text}` },
   ];
@@ -181,7 +181,9 @@ export async function extractCourses(
       else { prev.credits ??= row.credits; prev.hours ??= row.hours; prev.semester ??= row.semester; }
     }
   }
-  for (const [k, c] of best) c.core_in_section = sectionNames.has(k) || (!!coreText && coreText.includes(k)) || c.core_in_section;
+  // expert rule: core = listed in the 核心课程 section only. When that section was found, the model's own flag is ignored
+  // (fallback chunks also contain lists such as 专业基础课程/主干学科, which are not core).
+  for (const [k, c] of best) c.core_in_section = coreText ? sectionNames.has(k) || coreText.includes(k) : c.core_in_section;
   res.courses = [...best.values()];
   return res;
 }
