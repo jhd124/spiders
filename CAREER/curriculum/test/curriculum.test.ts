@@ -265,7 +265,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.ok(s.tags >= 1);
   const db2 = new Database(process.env.CAREER_DB!);
   assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
-  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 38);
+  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 93); // 38 + 55 batch-2 skills (016)
   db2.close();
 });
 
@@ -286,7 +286,9 @@ test('table chunking: one unit per 课程类别 block, label fragments kept, sub
   const units = planChunks(pages);
   assert.deepEqual(units.map((u) => u.kind), ['core_section', 'table_block', 'table_block']);
   assert.equal(typeFromBlock('专业限选课程', '必修'), '限选');
-  assert.equal(typeFromBlock('专业核心课程', null), null);
+  assert.equal(typeFromBlock('专业核心课程', null), '必修'); // required category by name (only when the model gave no type)
+  assert.equal(typeFromBlock('通识教育核心课程', null), null);
+  assert.equal(typeFromBlock('专业核心课程', '任选'), '任选');
 });
 
 test('evidence-based tagging: verbatim quote checked, hedges flagged, tool skills need the tool named', async () => {
@@ -577,4 +579,123 @@ test('core section: only 核心课程 counts (专业基础课程 / 主干学科 
   assert.equal(findCoreSection([{ page: 1, text: '三、主干学科\n计算机科学与技术\n四、毕业要求' }]), null);
   const sdu = [{ page: 1, text: '四、核心课程设置\n本专业必修核心课程包括数据结构、操作系统等。\n五、实践' }];
   assert.equal(findCoreSection(sdu)!.text, '四、核心课程设置\n本专业必修核心课程包括数据结构、操作系统等。');
+});
+
+test('code tables parsed without LLM: 哈工大（威海） numbered blocks, 中国石油大学（华东） names above/inside code rows', async () => {
+  const { parseCodeTable, splitEnglish } = await import('../codetable.js');
+  const hitRows = Array.from({ length: 14 }, (_, i) => `22WHPE1300${i} | 体育（${i}） | 1.0 | 32 | 1秋`).join('\n');
+  const hit = [{ page: 5, text: `六、课程体系及学分分布\n（一）公共基础课\n1. | 体育\n课程代码 | 课程名称 | 学分 | 学时 | 备注\n${hitRows}\n（二）大类平台课\n2.2 | 大类专业基础限选课\n2.2.2 | 信息学院模块\n22WHIE22020 | 电路基础 | A | 2.5 | 40 | 2秋\n（三）专业方向课\n1. | 专业方向核心课程（含实习实训课程）\n22WHCS31101 | 计算机体系结构 | 4.0 | 64 | 3秋\n2.1 | 专业方向选修课表一\n22WHCS32108 | 软件工程 | 2.0 | 32 | 3春` },
+    { page: 9, text: '计算机科学与技术专业教学进程计划方案\n22WHCS31101 | 计算机体系结构 | 4.0 | 64 | 40 | 24 | 考试' }];
+  const h = parseCodeTable(hit)!;
+  assert.equal(h.layout, 'hitwh');
+  assert.equal(h.courses.length, 17, 'the 教学进程计划 repeat is not parsed');
+  const by = new Map(h.courses.map((c) => [c.name, c]));
+  assert.deepEqual([by.get('电路基础A')!.course_type, by.get('电路基础A')!.block, by.get('电路基础A')!.module, by.get('电路基础A')!.credits], ['限选', '大类专业基础限选课', '信息学院模块', 2.5]);
+  assert.deepEqual([by.get('计算机体系结构')!.course_type, by.get('计算机体系结构')!.block, by.get('计算机体系结构')!.semester], ['必修', '专业方向核心课程（含实习实训课程）', '3秋']);
+  assert.equal(by.get('软件工程')!.course_type, '任选');
+
+  const fill = Array.from({ length: 14 }, (_, i) => `体育（4-${i}）\nUPE11011410${i % 10} | 1 | 32 | 0 | 0 | 0 | 32 | 0 | 1\nPhysical Education`).join('\n');
+  const upc = [{ page: 5, text: `六、课程设置\n课程 | 课程 | 学 | 课内学时 | 课外\n${fill}\n毛泽东思想和中国特色社会主义理\n论体系概论\nMRX210111053 | Introduction to Mao Zedong Thought | 2.5 | 40 | 40 | 0 | 0 | 0 | 40 | 4\nand Theoretical System\n习近平新时代中国特色社会主义思\n思政 | 想概论\n类课 | MRX710211021 | Introduction to Xi Jinping Thought | 2.5 | 40 | 40 | 0 | 0 | 0 | 40 | 4\n课程 | 至少修读10学分通识教育选修课程，其中通识教育核\n选修 | ≥10 | 1-8\n离散数学（2-1）\nCST210812101 | 3 | 48 | 48 | 0 | 0 | 0 | 48 | 1\nDiscrete Mathematics（2-1）\nCST324011030 | 数据结构Data Structure | 3 | 52 | 40 | 12 | 40 | 3\n专业 | 面向对象程序设计（Java）\nCST226421030 | 3 | 56 | 32 | 0 | 24 | 0 | 52 | 3 | A\n必修 | Object Oriented Programming（Java）\n具身智能技术 | 应用\nCST523221020 | 2 | 40 | 16 | 24 | 6\nEmbodied intelligent technology | 类\n七、毕业要求` }];
+  const u = parseCodeTable(upc)!;
+  assert.equal(u.layout, 'upc');
+  const names = u.courses.map((c) => c.name).filter((n) => !n.startsWith('体育'));
+  assert.deepEqual(names, ['毛泽东思想和中国特色社会主义理论体系概论', '习近平新时代中国特色社会主义思想概论', '离散数学（2-1）', '数据结构', '面向对象程序设计（Java）', '具身智能技术']);
+  const oop = u.courses.find((c) => c.name.startsWith('面向对象'))!;
+  assert.deepEqual([oop.course_type, oop.module, oop.credits, oop.hours], ['任选', 'A方向', 3, 56]);
+  assert.equal(u.courses.find((c) => c.name === '离散数学（2-1）')!.course_type, '必修');
+  assert.deepEqual(splitEnglish('数据结构Data Structure'), { han: '数据结构', en: 'Data Structure' });
+  assert.deepEqual(splitEnglish('数据分析（Python）'), { han: '数据分析（Python）', en: '' });
+  assert.deepEqual(splitEnglish('嵌入式Linux应用开发'), { han: '嵌入式Linux应用开发', en: '' });
+  assert.equal(parseCodeTable([{ page: 1, text: 'sd03030721 | 数据结构(双语) | 4.5 | 80' }]), null, 'SDU layout untouched');
+});
+
+test('extraction with a code table: only the 核心课程 section goes to the model; core = exact names (line breaks joined), no substring hits', async () => {
+  const { extractCourses, coreSectionNames, coreNameExtends } = await import('../extract.js');
+  const rows = Array.from({ length: 14 }, (_, i) => `22WHPE1300${i} | 体育（${i}） | 1.0 | 32 | 1秋`).join('\n');
+  const pages = [{ page: 2, text: '四、专业基础课程和专业核心课程\n专业基础课程：数据库系统、操作系统。\n专业核心课程：计算机体系结构、模式识别与机器\n学习、编译原理。\n五、修业年限' },
+    { page: 5, text: `六、课程体系及学分分布\n1. | 公共\n${rows}\n2. | 专业课\n22WHCS22022 | 数据库系统及安全 | 3.0 | 48 | 3秋\n22WHCS22012 | 操作系统 | 3.5 | 56 | 3秋\n22WHCS31101 | 计算机体系结构 | 4.0 | 64 | 3秋\n22WHCS31102 | 模式识别与机器学习 | 3.5 | 56 | 3秋\n22WHCS31103 | 编译原理与技术 | 3 | 48 | 3春\n22WHCS31104 | 计算机体系结构课程设计 | 1 | 16 | 3春` }];
+  const sent: string[] = [];
+  const provider = { model: 'stub', isMock: false, async chat(m: { content: string }[]) {
+    sent.push(m.at(-1)!.content);
+    return { model: 'stub', text: JSON.stringify({ courses: [{ name: '编译原理', course_type: null, block: null, module: null, core_in_section: true, credits: null, hours: null, semester: null, page: 2, snippet: '编译原理', confidence: 0.9 }] }) };
+  } };
+  const r = await extractCourses(pages, { school: 'x', majorCode: '080901', majorName: 'x' }, provider as never, new MemoryCache());
+  assert.equal(sent.length, 1); assert.match(sent[0]!, /专业核心课程：/); assert.doesNotMatch(sent[0]!, /22WHCS/);
+  const core = r.courses.filter((c) => c.core_in_section).map((c) => c.name).sort();
+  assert.deepEqual(core, ['模式识别与机器学习', '编译原理与技术', '计算机体系结构'].sort());
+  assert.ok(!r.courses.some((c) => c.name === '编译原理'), 'core-only entry merged into its table row');
+  assert.equal(r.courses.filter((c) => !c.course_type).length, 0);
+  assert.deepEqual(coreSectionNames('四、核心课程设置\n本专业必修核心课程包括高级程序设计、数据结构、软\n件工程等。'), ['高级程序设计', '数据结构', '软件工程']);
+  assert.equal(coreNameExtends('数据库系统及安全', '数据库系统'), false);
+  assert.equal(coreNameExtends('数据结构课程设计', '数据结构'), false);
+  assert.equal(coreNameExtends('编译原理与技术', '编译原理'), true);
+});
+
+test('ingest never overwrites known credits/type/block with null; 015 restores SDU 080901 credits', async () => {
+  const { migrate } = await import('../../migrate.js');
+  const { ingestCurriculum } = await import('../load.js');
+  const { sourceId } = await import('../manifest.js');
+  const Database = (await import('better-sqlite3')).default;
+  const dbPath = join(TMP, 'coalesce.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.prepare("INSERT INTO major_category (code, name, catalog_edition, source_url) VALUES ('08','工学',2026,'x')").run();
+  db.prepare("INSERT INTO major (code, base_code, name, category_code, category_name, is_special, is_controlled, is_engineering, degree_categories, catalog_edition, source_url, updated_at) VALUES ('080901','080901','计算机科学与技术','08','工学',0,0,1,'工学',2026,'x','t')").run();
+  const url = 'https://example.edu.cn/coalesce.pdf';
+  const manifest = join(TMP, 'm2.csv');
+  writeFileSync(manifest, `school,major_code,grade_year,url,format,verified_by,notes\n山东大学,080901,2024级,${url},pdf,expert,\n`);
+  const id = sourceId(url);
+  writeFileSync(join(TMP, 'raw', 'career-curriculum.json'), JSON.stringify({ docs: [{ source: { id }, meta: { sha256: 'cd'.repeat(32), bytes: 1, fetched_at: 't', url } }] }));
+  const c = (x: object) => ({ name: '操作系统', course_type: '必修', block: '专业核心课程', module: null, core_in_section: false, credits: 4, hours: 72, semester: '4', page: 3, snippet: '操作系统 | 4', confidence: 0.9, ...x });
+  const clean = (x: object) => writeFileSync(join(TMP, 'clean', 'career-curriculum.json'), JSON.stringify({ results: [{ source_id: id, school: '山东大学', major_code: '080901', doc_sha256: 'cd'.repeat(32), url, model: 'm', mock: false, courses: [c(x)] }] }));
+  clean({});
+  ingestCurriculum(db, { manifest });
+  clean({ credits: null, hours: null, course_type: null, block: null, semester: null });
+  ingestCurriculum(db, { manifest });
+  const get = () => db.prepare('SELECT credits, hours, course_type, table_block, semester FROM major_course').get();
+  assert.deepEqual(get(), { credits: 4, hours: 72, course_type: '必修', table_block: '专业核心课程', semester: '4' });
+  // a server-like row that already lost its credits: 015 fills it from the verified values (操作系统 = 4 / 72 in the verified SDU 080901 table)
+  db.prepare("UPDATE major_course SET credits = NULL, hours = NULL").run();
+  db.prepare("UPDATE course SET credits = NULL").run();
+  db.prepare("DELETE FROM schema_migrations WHERE version = '015'").run();
+  db.close();
+  migrate(dbPath, () => {});
+  const d2 = new Database(dbPath);
+  assert.deepEqual(d2.prepare('SELECT credits, hours FROM major_course').get(), { credits: 4, hours: 72 });
+  assert.equal((d2.prepare('SELECT credits FROM course').get() as { credits: number }).credits, 4);
+  d2.close();
+});
+
+test('016 batch-2 skills: types, no duplicates, aliases; adding skills does not re-tag cached courses', async () => {
+  const { tagSkills } = await import('../tag.js');
+  const { LlmSkillTagger, TOOL_TERMS } = await import('../skills.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'm016.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  const q = (s: string) => db.prepare(s).all();
+  assert.deepEqual(q("SELECT name FROM skill WHERE tag_batch = 2 AND skill_type = '工具与技术' ORDER BY name").map((r: any) => r.name), ['CAD建模', 'EDA工具', 'MATLAB', 'PCB设计', 'PLC编程', 'Verilog/VHDL', '有限元分析'].sort());
+  assert.equal(q('SELECT * FROM skill WHERE tag_batch = 2').length, 55);
+  assert.deepEqual(q("SELECT primary_domain_id p, secondary_domain_id s FROM skill WHERE name = '理论力学'"), [{ p: 'mechanical', s: 'foundation' }]);
+  assert.deepEqual(q("SELECT secondary_domain_id s FROM skill WHERE name = '单片机原理'"), [{ s: 'hardware' }]);
+  assert.deepEqual(q("SELECT alias FROM skill_alias WHERE skill_id IN ('mechanical.cad','mechanical.fea') ORDER BY alias").map((r: any) => r.alias), ['ANSYS', 'AutoCAD', 'SolidWorks']);
+  for (const r of q("SELECT id FROM skill WHERE skill_type = '工具与技术'") as { id: string }[]) assert.ok(TOOL_TERMS[r.id], `tool term for ${r.id}`);
+  // a course tagged with the batch-1 table: hide batch 2, tag, then reveal batch 2 -> the cached result is reused, no LLM call
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES ('s:操作系统', 's', '操作系统', 'u', 'llm')").run();
+  db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, snippet) VALUES ('s', '080901', 's:操作系统', 'u', 'llm', '必修', 0, 'x | 操作系统 | 3')").run();
+  db.prepare("CREATE TABLE skill_b2 AS SELECT * FROM skill WHERE tag_batch = 2").run();
+  db.prepare("DELETE FROM skill WHERE tag_batch = 2").run();
+  db.close();
+  let calls = 0;
+  const provider = { model: 'stub', isMock: false, async chat() { calls++; return { model: 'stub', text: JSON.stringify({ courses: [{ course: '操作系统', reason: null, skills: [{ skill_id: 'software.os', evidence_type: '课名推断', quote: 'x | 操作系统 | 3', rationale: 'r' }] }] }) }; } };
+  await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(calls, 1);
+  const d = new Database(dbPath); d.prepare('INSERT INTO skill SELECT * FROM skill_b2').run(); d.close();
+  const s = await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(calls, 1, 'no re-tag after adding batch-2 skills'); assert.equal(s.reused, 1);
+  const d3 = new Database(dbPath); d3.prepare("UPDATE skill SET name = '操作系统' WHERE id = 'software.os'").run(); d3.close();
+  await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.equal(calls, 2, 'renaming a batch-1 skill still re-tags');
 });

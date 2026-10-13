@@ -310,3 +310,13 @@ npm run test:career                                                             
 ### 013 审核过的行也刷新原文事实（2026-10-13 服务器 bug）
 
 服务器上 19 门课在 008 之前就被审核通过了。入库的 upsert 只更新 `review_status='pending'` 的行，所以这 19 行一直停在 008 新列的默认值（`core_in_section=0`、`course_type=NULL`），009 再按 `core_in_section` 重算 `is_core`，结果全部变成 0，核心课名也就是 0。现在入库对已审核的行也刷新原文事实（`core_in_section`、`table_block`、`module`、`is_core`；`course_type` 只补空值），审核状态和审核人改过的学分等字段不动。修复只用缓存的抽取结果，不花 token。
+
+### 2026-10-13: code-table parsers, core matching, batch-2 skills
+- `curriculum/codetable.ts`: course tables with course codes in a known layout (哈工大（威海） `22WHCS…` rows under numbered blocks;
+  中国石油大学（华东） `CST…` rows with the name on separate lines) are parsed without the LLM; only the 核心课程 section goes to the model.
+  UPC 必修/选修 comes from the course code (8th char 1/2), the A–D direction letter is stored as module.
+- Core = exact (normalized, line breaks joined) names of the 核心课程 section; no substring matches. A core name with no table row of that
+  exact name merges into the single table row that extends it by a short qualifier (编译原理 → 编译原理与技术).
+- Ingest never overwrites a known credits/hours/semester/course_type/table_block/module with null (015 restored SDU 080901 credits).
+- 016: 55 batch-2 skills (`skill.tag_batch = 2`). The per-course tag cache also accepts results made with the batch-1 skill table, so adding
+  skills does not re-tag existing courses; new courses see all skills. Renaming/retyping a batch-1 skill still re-tags everything.

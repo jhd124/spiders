@@ -1,0 +1,78 @@
+-- CAREER 016 (2026-10-13): level-2 skills batch 2 (expert list). 工具 -> 工具与技术, everything else 专业知识. No LLM call.
+--  * skill.tag_batch: 1 = skills the existing tags were made with, 2 = this batch. The tagger's per-course cache also accepts a
+--    result made with the batch-1 skill table, so adding skills does NOT re-tag existing courses (see tag.ts); new courses see all.
+--  * 理论力学 was only named in the foundation domain description: it becomes a skill with primary mechanical, secondary foundation.
+--  * no duplicates of existing skills (模拟电路/数字逻辑/嵌入式硬件/FPGA stay as they are).
+ALTER TABLE skill ADD COLUMN tag_batch INTEGER NOT NULL DEFAULT 1;
+INSERT OR IGNORE INTO skill_domain (id, name, description, sort_order, source) VALUES
+  ('hardware', '电路与硬件', '模拟/数字电路、PCB、嵌入式硬件', 6, 'expert 2026-10-13'),
+  ('semiconductor', '集成电路与微电子', '芯片设计、工艺、封测', 7, 'expert 2026-10-13'),
+  ('communication', '通信技术', '无线/有线通信、射频、协议', 8, 'expert 2026-10-13'),
+  ('embedded', '自动化与控制', '控制理论、PLC、运动控制、机器人', 9, 'expert 2026-10-13'),
+  ('electrical', '电气工程', '电力系统、电机电控', 10, 'expert 2026-10-13'),
+  ('energy', '能源与动力', '热工、发动机、新能源发电、储能', 11, 'expert 2026-10-13'),
+  ('mechanical', '机械设计', '机械设计、CAD/CAE、制造工艺', 12, 'expert 2026-10-13'),
+  ('vehicle', '车辆工程', '车辆工程', 13, 'expert 2026-10-13'),
+  ('foundation', '工程基础', '高等数学、大学物理、工程制图', 1, 'expert 2026-10-13');
+UPDATE skill_domain SET description = '高等数学、大学物理、工程制图（理论力学归入机械设计）' WHERE id = 'foundation' AND description LIKE '%理论力学%';
+UPDATE skill_domain SET description = '理论力学、机械设计、CAD/CAE、制造工艺' WHERE id = 'mechanical' AND description = '机械设计、CAD/CAE、制造工艺';
+INSERT OR IGNORE INTO skill (id, name, primary_domain_id, secondary_domain_id, skill_type, source, reviewed, tag_batch) VALUES
+  ('hardware.signals-systems', '信号与系统', 'hardware', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('hardware.dsp', '数字信号处理', 'hardware', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('hardware.em-fields', '电磁场与电磁波', 'hardware', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('hardware.pcb', 'PCB设计', 'hardware', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('hardware.measurement', '电子测量', 'hardware', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.physics', '半导体物理', 'semiconductor', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.devices', '半导体器件', 'semiconductor', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.analog-ic', '模拟集成电路设计', 'semiconductor', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.digital-ic', '数字集成电路设计', 'semiconductor', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.process', '集成电路工艺', 'semiconductor', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.hdl', 'Verilog/VHDL', 'semiconductor', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('semiconductor.eda', 'EDA工具', 'semiconductor', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.principles', '通信原理', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.info-theory', '信息论与编码', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.wireless', '无线通信', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.rf-microwave', '射频与微波', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.optical', '光纤通信', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('communication.mobile', '移动通信系统', 'communication', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.control-theory', '自动控制原理', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.modern-control', '现代控制理论', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.plc', 'PLC编程', 'embedded', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.motion-control', '运动控制', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.sensors', '传感器与检测技术', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.robotics', '机器人学', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.embedded-sw', '嵌入式软件开发', 'embedded', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('embedded.mcu', '单片机原理', 'embedded', 'hardware', '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.circuits', '电路原理', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.machines', '电机学', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.power-electronics', '电力电子技术', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.power-systems', '电力系统分析', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.protection', '电力系统继电保护', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.high-voltage', '高电压技术', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('electrical.electric-control', '电气控制', 'electrical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.thermodynamics', '工程热力学', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.heat-transfer', '传热学', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.fluid-mechanics', '流体力学', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.combustion', '燃烧学', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.storage', '储能技术', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('energy.pv-wind', '光伏与风电技术', 'energy', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.theoretical-mechanics', '理论力学', 'mechanical', 'foundation', '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.materials-mechanics', '材料力学', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.mechanisms', '机械原理', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.machine-design', '机械设计', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.manufacturing', '机械制造技术', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.tolerances', '互换性与测量', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.hydraulics', '液压与气动', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.cad', 'CAD建模', 'mechanical', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.fea', '有限元分析', 'mechanical', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2),
+  ('mechanical.cnc', '数控加工', 'mechanical', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('vehicle.construction', '汽车构造', 'vehicle', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('vehicle.theory', '汽车理论', 'vehicle', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('vehicle.battery-bms', '动力电池与电池管理', 'vehicle', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('vehicle.motor-drive', '电机驱动与控制', 'vehicle', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('vehicle.adas', '智能网联与自动驾驶', 'vehicle', NULL, '专业知识', 'expert 2026-10-13 batch2', 1, 2),
+  ('foundation.matlab', 'MATLAB', 'foundation', NULL, '工具与技术', 'expert 2026-10-13 batch2', 1, 2);
+INSERT OR IGNORE INTO skill_alias (alias, skill_id, source) VALUES
+  ('SolidWorks', 'mechanical.cad', 'expert 2026-10-13'),
+  ('AutoCAD', 'mechanical.cad', 'expert 2026-10-13'),
+  ('ANSYS', 'mechanical.fea', 'expert 2026-10-13');

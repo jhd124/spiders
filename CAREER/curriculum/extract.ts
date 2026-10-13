@@ -7,12 +7,15 @@
  *     label is split across lines; fallback when no table is recognised: keyword-filtered page chunks.
  * Cost control: responses cached by sha256(model + prompt version + prompt); --refresh re-asks the model.
  * Anti-hallucination: every course must quote a snippet that occurs verbatim in its chunk.
+ * Tables with course codes in a known layout (codetable.ts: 哈工大（威海）, 中国石油大学（华东）) are parsed deterministically:
+ * then only the 核心课程 section goes to the model.
  */
 import type { ChatMessage, ChatProvider } from '../../lib/llm.js';
 import { MockProvider } from '../../lib/llm.js';
 import { cacheKey, type LlmCache } from './cache.js';
 import { OUTPUT_SCHEMA, validateExtraction, type CourseType, type ExtractedCourse } from './schema.js';
 import { findCoreSection, segmentTableBlocks } from './tables.js';
+import { parseCodeTable } from './codetable.js';
 import type { PageText } from './text.js';
 
 export const PROMPT_VERSION = 'curriculum-all-v2';
@@ -113,7 +116,25 @@ export const normCourseName = (s: string) => norm(s).replace(/[（(][^）)]*[）
 
 /** course_type from an explicit block name wins over the model's guess */
 export const typeFromBlock = (block: string | null, fallback: CourseType | null): CourseType | null =>
-  !block ? fallback : /限选/.test(block) ? '限选' : /任选|选修/.test(block) ? '任选' : /必修/.test(block) ? '必修' : fallback;
+  !block ? fallback : /限选/.test(block) ? '限选' : /任选|选修/.test(block) ? '任选' : /必修/.test(block) ? '必修' : fallback ?? impliedType(block);
+/** a block whose name says neither 必修 nor 选修 but is a required category by name (学科平台基础课程, 专业基础课程, 专业核心课程,
+ *  重点提升计划); 通识教育核心课程 is a choice category and stays null. Only used when the model gave no course_type. */
+export const impliedType = (block: string): CourseType | null =>
+  /通识/.test(block) ? null : /(平台|基础|核心)课程|重点提升计划/.test(block) ? '必修' : null;
+
+/** names listed in a 核心课程 section text: split on list punctuation after joining line breaks ("机器学\n习"), lead-in phrases
+ *  ("本专业必修核心课程包括…", "专业核心课程：") and a trailing 等 removed */
+export function coreSectionNames(text: string): string[] {
+  const body = text.split('\n').slice(1).join('');
+  return norm(body).split(/[、，,；;。]/).map((t) => t.replace(/^.*(包括|包含|核心课程[:：]|主干课程[:：]|[:：])/, '').replace(/等$/, '')).map(normCourseName).filter((t) => t.length >= 2);
+}
+/** a table course whose name extends a core name by a short qualifier ("编译原理" -> "编译原理与技术"); never a different course
+ *  such as 课程设计/实验/实践/实习/导读 or a longer name ("数据库系统" -> "数据库系统及安全" is NOT matched: 3+ chars) */
+export const coreNameExtends = (table: string, core: string) => {
+  if (!table.startsWith(core) || table === core) return false;
+  const rest = table.slice(core.length);
+  return rest.length <= 3 && /^(与技术|技术|及应用|与应用|原理|基础|概论|导论)$/.test(rest);
+};
 
 export interface ExtractionResult {
   model: string;
@@ -131,14 +152,17 @@ export async function extractCourses(
   cache: LlmCache,
   opts: { refresh?: boolean } = {},
 ): Promise<ExtractionResult> {
-  const units = planChunks(pages);
+  const table = parseCodeTable(pages);
+  // a deterministically parsed table replaces the model's table/fallback units; the 核心课程 section still goes to the model
+  const units = table ? planChunks(pages).filter((u) => u.kind === 'core_section') : planChunks(pages);
   const res: ExtractionResult = {
     model: provider.model, mock: provider.isMock, prompt_version: PROMPT_VERSION, courses: [], errors: [],
     stats: { chunks: units.length, sent: units.length, cached: 0, llm_calls: 0, dropped_invalid: 0, dropped_unverified: 0, prompt_tokens: 0, completion_tokens: 0 },
   };
   const best = new Map<string, ExtractedCourse>();
   const sectionNames = new Set<string>();
-  const coreText = norm(units.find((u) => u.kind === 'core_section')?.text ?? '');
+  const coreRaw = units.find((u) => u.kind === 'core_section')?.text.replace(/^\[\[第\d+页\]\]\n/, '') ?? '';
+  const coreText = norm(coreRaw);
   for (const unit of units) {
     const messages = buildMessages(ctx, unit);
     const key = cacheKey(provider.model, PROMPT_VERSION, messages.map((m) => m.content).join('\n\u0000\n'));
@@ -183,7 +207,27 @@ export async function extractCourses(
   }
   // expert rule: core = listed in the 核心课程 section only. When that section was found, the model's own flag is ignored
   // (fallback chunks also contain lists such as 专业基础课程/主干学科, which are not core).
-  for (const [k, c] of best) c.core_in_section = coreText ? sectionNames.has(k) || coreText.includes(k) : c.core_in_section;
+  if (table) {
+    res.errors.push(`table parsed without LLM (${table.layout}): ${table.courses.length} rows`);
+    for (const c of table.courses) {
+      const k = normCourseName(c.name);
+      const prev = best.get(k);
+      if (!prev || prev.block === null) best.set(k, { ...c, course_type: typeFromBlock(c.block, c.course_type), core_in_section: prev?.core_in_section ?? false });
+      else { prev.credits ??= c.credits; prev.hours ??= c.hours; prev.semester ??= c.semester; }
+    }
+  }
+  // Core names = what the model read from the section + the section's own list (exact names, line breaks joined). Exact match only:
+  // a table course is never core because its name is a substring of the section text (old false positives).
+  const coreSet = new Set([...sectionNames, ...(coreRaw ? coreSectionNames(coreRaw) : [])]);
+  if (coreText) for (const [k, c] of best) c.core_in_section = coreSet.has(k);
+  // a core-section-only entry (no table row under that exact name) merges into the one table row that extends its name
+  for (const [k, c] of [...best]) {
+    if (!c.core_in_section || c.block !== null || c.credits !== null) continue;
+    const ext = [...best.entries()].filter(([tk, t]) => t.block !== null && coreNameExtends(tk, k));
+    if (ext.length !== 1) continue;
+    ext[0]![1].core_in_section = true;
+    best.delete(k);
+  }
   res.courses = [...best.values()];
   return res;
 }

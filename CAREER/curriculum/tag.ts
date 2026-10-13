@@ -90,11 +90,14 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
   migrate(dbPath, () => {});
   const db = new Database(dbPath);
   try {
-    const skills = db.prepare(`SELECT s.id, s.name, s.primary_domain_id AS domain_id, d.name AS domain_name, s.skill_type
-      FROM skill s JOIN skill_domain d ON d.id = s.primary_domain_id ORDER BY d.sort_order, s.id`).all() as SkillRef[];
+    const skills = db.prepare(`SELECT s.id, s.name, s.primary_domain_id AS domain_id, d.name AS domain_name, s.skill_type, s.tag_batch
+      FROM skill s JOIN skill_domain d ON d.id = s.primary_domain_id ORDER BY d.sort_order, s.id`).all() as (SkillRef & { tag_batch: number })[];
     const t = tagger ?? new LlmSkillTagger(providerFromEnv(mockTagProvider(skills)), new SqliteLlmCache(db));
     const mock = t.name === 'mock';
-    const sHash = skillTableHash(skills);
+    const sHash = skillTableHash(skills.map(({ tag_batch: _b, ...x }) => x));
+    // A cached result made with the batch-1 skill table stays valid after skills are ADDED (016): existing courses are not re-tagged
+    // just because e.g. 机械/电气 skills appeared. A rename/retype of a batch-1 skill still changes this hash and re-tags everything.
+    const sHashBatch1 = skillTableHash(skills.filter((x) => x.tag_batch === 1).map(({ tag_batch: _b, ...x }) => x));
     const rows = db.prepare(`SELECT mc.school_id, mc.major_code, c.id AS course_id, c.name, mc.course_type, mc.is_core, mc.table_block, COALESCE(mc.credits, c.credits) AS credits, mc.snippet, mc.curriculum_source_id,
         COALESCE(s.name, mc.school_id) AS school, COALESCE(m.name, mc.major_code) AS major
       FROM major_course mc JOIN course c ON c.id = mc.course_id LEFT JOIN school s ON s.id = mc.school_id LEFT JOIN major m ON m.code = mc.major_code
@@ -117,7 +120,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         const own = lines ? evidenceFor(lines, [c]).excerpt : (c.snippet ?? '');
         const key = courseTagKey(t.name, c.name, own, sHash, opts.rulesVersion);
         const hit = mock ? undefined : (getCache.get(c.course_id) as { tag_key: string; result_json: string } | undefined);
-        if (hit && hit.tag_key === key) { results.set(c.course_id, { c, key, res: JSON.parse(hit.result_json) as CourseResult, fresh: false, model: '' }); sum.reused++; }
+        if (hit && (hit.tag_key === key || hit.tag_key === courseTagKey(t.name, c.name, own, sHashBatch1, opts.rulesVersion))) { results.set(c.course_id, { c, key, res: JSON.parse(hit.result_json) as CourseResult, fresh: false, model: '' }); sum.reused++; }
         else { todo.push(c); results.set(c.course_id, { c, key, res: { tags: [], untagged: null }, fresh: true, model: '' }); }
       }
       for (let i = 0; i < todo.length; i += BATCH) {
@@ -154,6 +157,10 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
       const delUn = db.prepare('DELETE FROM course_skill_untagged WHERE course_id = ?');
       const setCache = db.prepare(`INSERT INTO course_skill_tag_cache (course_id, tag_key, result_json, model, tagged_at) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (course_id) DO UPDATE SET tag_key = excluded.tag_key, result_json = excluded.result_json, model = excluded.model, tagged_at = excluded.tagged_at`);
+      // courses no longer in any (non-rejected) plan row — e.g. renamed by a better table parse — lose their unreviewed LLM tags
+      const active = "SELECT course_id FROM major_course WHERE review_status <> 'rejected'";
+      sum.rows_deleted += db.prepare(`DELETE FROM course_skill WHERE reviewed = 0 AND extraction_method = 'llm' AND course_id NOT IN (${active})`).run().changes;
+      db.prepare(`DELETE FROM course_skill_untagged WHERE course_id NOT IN (${active})`).run();
       for (const { c, key, res, fresh, model } of results.values()) {
         // a response with no entry for the course (bad JSON, truncated output) is not cached: the course is retried next run
         if (fresh && !(res.untagged?.reason === 'model returned no entry for this course')) setCache.run(c.course_id, key, JSON.stringify(res), model, now);

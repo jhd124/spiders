@@ -76,6 +76,14 @@ export const TOOL_NAME_LITERAL: Record<string, RegExp> = {
   'data.bi-tools': /商业智能|Tableau|Power ?BI/i,
   'hardware.fpga': /FPGA|Verilog|VHDL/i,
   'ai.llm-apps': /大模型|大语言模型|LLM/i,
+  // batch 2 (016)
+  'hardware.pcb': /PCB|Altium|印制电路板/i,
+  'semiconductor.hdl': /Verilog|VHDL/i,
+  'semiconductor.eda': /EDA|Cadence|Synopsys/i,
+  'embedded.plc': /PLC|可编程控制器|可编程逻辑控制器/i,
+  'mechanical.cad': /CAD|SolidWorks|AutoCAD/i,
+  'mechanical.fea': /有限元|ANSYS|Abaqus/i,
+  'foundation.matlab': /MATLAB/i,
 };
 export const TOOL_NAME_WHITELIST: Record<string, string[]> = {
   '数据库系统': ['software.db-sql'], // approved by the expert 2026-10-13
@@ -156,6 +164,14 @@ export const TOOL_TERMS: Record<string, RegExp> = {
   'data.bi-tools': /商业智能|\bBI\b|Tableau|Power ?BI/i,
   'hardware.fpga': /FPGA|硬件描述语言|Verilog|VHDL/i,
   'ai.llm-apps': /大模型|大语言模型|LLM|GPT/i,
+  // batch 2 (016): only when the text names the tool
+  'hardware.pcb': /PCB|Altium|印制电路板/i,
+  'semiconductor.hdl': /Verilog|VHDL|硬件描述语言/i,
+  'semiconductor.eda': /EDA|Cadence|Synopsys|电子设计自动化/i,
+  'embedded.plc': /PLC|可编程控制器|可编程逻辑控制器/i,
+  'mechanical.cad': /CAD|SolidWorks|AutoCAD|计算机辅助设计/i,
+  'mechanical.fea': /有限元|ANSYS|Abaqus/i,
+  'foundation.matlab': /MATLAB/i,
 };
 
 export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[], ctx: { school: string; major: string }, evidence?: TagEvidence): ChatMessage[] {

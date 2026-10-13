@@ -92,17 +92,20 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       course_type, core_in_section, table_block, module, credits, hours, curriculum_source_id, source_doc_id, source_page, snippet, model, review_status)
     VALUES (@school_id, @major_code, @course_id, @plan_year, @semester, @is_core, @source_url, @fetched_at, 'llm', @confidence, 0,
       @course_type, @core_in_section, @table_block, @module, @credits, @hours, @curriculum_source_id, @source_doc_id, @source_page, @snippet, @model, 'pending')
-    ON CONFLICT (school_id, major_code, course_id) DO UPDATE SET plan_year=excluded.plan_year, semester=excluded.semester, source_url=excluded.source_url, fetched_at=excluded.fetched_at,
-      confidence=excluded.confidence, is_core=excluded.is_core, course_type=excluded.course_type, core_in_section=excluded.core_in_section, table_block=excluded.table_block, module=excluded.module, credits=excluded.credits, hours=excluded.hours, curriculum_source_id=excluded.curriculum_source_id,
+    ON CONFLICT (school_id, major_code, course_id) DO UPDATE SET plan_year=excluded.plan_year, semester=COALESCE(excluded.semester, major_course.semester), source_url=excluded.source_url, fetched_at=excluded.fetched_at,
+      confidence=excluded.confidence, is_core=excluded.is_core, course_type=COALESCE(excluded.course_type, major_course.course_type), core_in_section=excluded.core_in_section,
+      table_block=COALESCE(excluded.table_block, major_course.table_block), module=COALESCE(excluded.module, major_course.module), credits=COALESCE(excluded.credits, major_course.credits), hours=COALESCE(excluded.hours, major_course.hours), curriculum_source_id=excluded.curriculum_source_id,
       source_doc_id=excluded.source_doc_id, source_page=excluded.source_page, snippet=excluded.snippet, model=excluded.model
     WHERE major_course.review_status = 'pending'`);
   // Source facts (where the PDF lists the course) are not reviewer judgments: refresh them on reviewed rows too, otherwise a row
   // approved before a schema change keeps the new columns' defaults forever (server bug 2026-10-13: 19 rows approved before 008
   // kept core_in_section 0 / course_type NULL, then 009 derived is_core 0 from that). A reviewer-set course_type is kept.
-  const upFacts = db.prepare(`UPDATE major_course SET core_in_section = @core_in_section, table_block = @table_block, module = @module, is_core = @is_core,
-      course_type = COALESCE(course_type, @course_type)
+  // Never overwrite a known fact with null (server 2026-10-13: a re-extraction without credits nulled 7 SDU 080901 credits).
+  const upFacts = db.prepare(`UPDATE major_course SET core_in_section = @core_in_section, table_block = COALESCE(@table_block, table_block), module = COALESCE(@module, module), is_core = @is_core,
+      course_type = COALESCE(course_type, @course_type), credits = COALESCE(credits, @credits), hours = COALESCE(hours, @hours)
     WHERE school_id = @school_id AND major_code = @major_code AND course_id = @course_id AND review_status <> 'pending'
-      AND (core_in_section IS NOT @core_in_section OR table_block IS NOT @table_block OR module IS NOT @module OR is_core IS NOT @is_core OR (course_type IS NULL AND @course_type IS NOT NULL))`);
+      AND (core_in_section IS NOT @core_in_section OR (@table_block IS NOT NULL AND table_block IS NOT @table_block) OR (@module IS NOT NULL AND module IS NOT @module) OR is_core IS NOT @is_core
+        OR (course_type IS NULL AND @course_type IS NOT NULL) OR (credits IS NULL AND @credits IS NOT NULL) OR (hours IS NULL AND @hours IS NOT NULL))`);
   let repaired = 0;
   let loaded = 0, skippedMock = 0;
   for (const r of clean.results) {
@@ -117,7 +120,7 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       upCourse.run({ id: courseId, school_id: s.schoolId, name: c.name, credits: c.credits, hours: c.hours, block: c.block, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence, model: r.model, source_doc_id: s.docId });
       upMc.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, plan_year: s.year, semester: c.semester, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence,
         course_type: c.course_type, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), credits: c.credits, hours: c.hours, curriculum_source_id: r.source_id, source_doc_id: s.docId, source_page: c.page, snippet: c.snippet, model: r.model });
-      repaired += upFacts.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), course_type: c.course_type }).changes;
+      repaired += upFacts.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), course_type: c.course_type, credits: c.credits, hours: c.hours }).changes;
       loaded++;
     }
     // a pending row of this source/major that the latest extraction no longer produces is stale -> delete
