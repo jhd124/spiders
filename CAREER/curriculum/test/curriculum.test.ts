@@ -474,3 +474,67 @@ test('ingest refreshes source facts on reviewed rows (server bug: approved befor
   assert.equal(r.review_status, 'approved'); assert.equal(r.credits, 9, 'reviewed values other than source facts untouched');
   db.close();
 });
+
+test('course-list quote is never 原文明确 -> 课名推断 + needs_review (expert 2026-10-13)', async () => {
+  const { quoteIsCourseList, parseTagResponse, applyCourseListRule } = await import('../skills.js');
+  const names = ['程序设计基础', '高级语言程序设计', '数据结构', '操作系统', '计算机网络', '数据库系统', '编译原理'];
+  assert.equal(quoteIsCourseList('程序设计基础、数据结构、操作系统、计算机网络等专业课程实验', '程序设计基础', names), true);
+  assert.equal(quoteIsCourseList('……高级语言程序设计、数据结构、编译原理等专业课程实验', '高级语言程序设计', names), true);
+  assert.equal(quoteIsCourseList('核心课程：操作系统、数据库系统、编译原理。', '操作系统', names), true);
+  assert.equal(quoteIsCourseList('程序设计基础：讲授C语言语法、指针与链表、递归和排序算法。', '程序设计基础', names), false);
+  assert.equal(quoteIsCourseList('操作系统课程要求学生完成进程调度与内存管理实验', '操作系统', names), false);
+  assert.equal(quoteIsCourseList('sd01 | 操作系统 | 4 | 72', '操作系统', names), false);
+  const src = '实践环节包括程序设计基础、数据结构、操作系统、计算机网络等专业课程实验。';
+  const courses = [{ course_id: 'c1', name: '程序设计基础', course_type: '必修', credits: 4, snippet: null }];
+  const skills = [{ id: 'software.dsa', name: '数据结构与算法', domain_id: 'software', domain_name: '软件', skill_type: '专业知识' }];
+  const r = parseTagResponse(JSON.stringify({ courses: [{ course: '程序设计基础', skills: [{ skill_id: 'software.dsa', evidence_type: '原文明确', quote: '程序设计基础、数据结构、操作系统、计算机网络等专业课程实验', rationale: '实验' }] }] }), courses, skills, src, names);
+  assert.equal(r.tags[0]!.evidence_type, '课名推断');
+  assert.equal(r.tags[0]!.needs_review, true);
+  assert.match(r.tags[0]!.review_reason!, /罗列课名/);
+  // cached (pre-rule) result gets the same treatment
+  const cached = { evidence_type: '原文明确', evidence_quote: '程序设计基础、数据结构、操作系统等专业课程实验', needs_review: false, review_reason: null };
+  const a = applyCourseListRule(cached, '程序设计基础', names);
+  assert.equal(a.evidence_type, '课名推断'); assert.equal(a.needs_review, true);
+  assert.deepEqual(applyCourseListRule(a, '程序设计基础', names), a);
+});
+
+test('014: expert rejections stick (no LLM, idempotent, cache cannot recreate); 数据挖掘 -> 机器学习', async () => {
+  const { tagSkills } = await import('../tag.js');
+  const { LlmSkillTagger } = await import('../skills.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  const dbPath = join(TMP, 'm014.db');
+  migrate(dbPath, () => {});
+  const db = new Database(dbPath);
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT OR IGNORE INTO school (id, name, source) VALUES ('name:山东大学', '山东大学', 't')").run();
+  const tags: Record<string, [string, string][]> = { '程序设计基础': [['software.dsa', '原文明确']], '高级语言程序设计': [['software.dsa', '原文明确']], '信息检索与数据挖掘': [['data.cleaning', '课名推断']], '操作系统': [['software.os', '课名推断']] };
+  for (const n of Object.keys(tags)) {
+    const id = `name:山东大学:${n}`;
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'name:山东大学', ?, 'u', 'llm')").run(id, n);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, plan_year, source_url, extraction_method, course_type, is_core, snippet) VALUES ('name:山东大学', '080901', ?, 2024, 'u', 'llm', '必修', 0, ?)").run(id, `x | ${n} | 3`);
+    for (const [sk, et] of tags[n]!) db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, evidence_type, evidence_quote) VALUES (?, ?, ?, 'llm', 0, ?, 'q')").run(id, sk, et === '原文明确' ? 1 : 0.5, et);
+  }
+  db.prepare("DELETE FROM schema_migrations WHERE version = '014'").run();
+  db.close();
+  migrate(dbPath, () => {}); migrate(dbPath, () => {}); // applied once; second run no-op
+  const d = new Database(dbPath);
+  const rows = () => d.prepare("SELECT c.name, cs.skill_id, cs.evidence_type, cs.weight, cs.reviewed FROM course_skill cs JOIN course c ON c.id = cs.course_id ORDER BY 1, 2").all();
+  assert.deepEqual(rows(), [
+    { name: '信息检索与数据挖掘', skill_id: 'ai.ml', evidence_type: '课名推断', weight: 0.5, reviewed: 1 },
+    { name: '操作系统', skill_id: 'software.os', evidence_type: '课名推断', weight: 0.5, reviewed: 0 },
+  ]);
+  assert.equal((d.prepare('SELECT count(*) n FROM course_skill_rejected').get() as { n: number }).n, 3);
+  // the (stub) model re-proposes the rejected tags: none is written back
+  let calls = 0;
+  const provider = { model: 'stub', isMock: false, async chat(m: { content: string }[]) {
+    calls++;
+    const names = m[m.length - 1]!.content.split('\n').filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/^\d+\. /, '').split('｜')[0]!);
+    return { model: 'stub', promptTokens: 1, completionTokens: 1, text: JSON.stringify({ courses: names.map((n) => ({ course: n, reason: null,
+      skills: (tags[n] ?? []).map(([sk]) => ({ skill_id: sk, evidence_type: '课名推断', quote: `x | ${n} | 3`, rationale: 'r' })) })) }) };
+  } };
+  await tagSkills(dbPath, new LlmSkillTagger(provider, new MemoryCache()));
+  assert.ok(calls >= 1);
+  assert.deepEqual(rows().map((r: any) => `${r.name}:${r.skill_id}`), ['信息检索与数据挖掘:ai.ml', '操作系统:software.os']);
+  d.close();
+});

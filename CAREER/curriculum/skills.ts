@@ -93,6 +93,30 @@ export function quoteIsNameOnly(quote: string, courseName: string, otherNames: s
   return q.replace(ROW_NOISE, '').length <= 2;
 }
 
+/** List filler around enumerated course names: "……等专业课程实验", "包括…以及…等课程" */
+const LIST_FILLER = /[…\.。，,、；;：:“”"'（）()\s]|等|及|以及|和|与|包括|如|主要|有|专业|核心|基础|课程|课|实验|实践|教学|环节|内容|开设|设置|学习|修读/g;
+/** Expert rule (2026-10-13): a quote that merely enumerates course names (e.g. "……数据结构、操作系统等专业课程实验") says nothing
+ *  about the tagged course's content, so it can never be 原文明确 and goes to needs_review. Heuristic: the quote names >= 2
+ *  courses (or uses an "等…课程" list marker), and after removing names, list filler and table noise almost nothing is left. */
+export function quoteIsCourseList(quote: string, courseName: string, otherNames: string[] = []): boolean {
+  let q = normQuote(quote);
+  const names = [...new Set([courseName, ...otherNames].map(normQuote).flatMap((n) => [n, n.replace(/[（(][^）)]*[）)]$/, '')]).filter((x) => x.length >= 2))].sort((a, b) => b.length - a.length);
+  let hits = 0;
+  for (const x of names) { if (q.includes(x)) { hits++; q = q.split(x).join('、'); } }
+  const enumerated = (q.match(/、/g)?.length ?? 0) >= 2;
+  const listMarker = /等[^，。；]{0,6}课程|课程[^，。；]{0,4}等/.test(normQuote(quote));
+  if (hits < 2 && !(listMarker && (hits >= 1 || enumerated))) return false;
+  return q.replace(ROW_NOISE, '').replace(LIST_FILLER, '').length <= 3;
+}
+export const COURSE_LIST_REASON = '引用原文只是罗列课名，不能算原文明确';
+/** applies the course-list rule to an already validated tag (fresh or from the per-course cache) */
+export function applyCourseListRule<T extends { evidence_type: string; evidence_quote: string | null; needs_review: boolean; review_reason: string | null }>(t: T, courseName: string, otherNames: string[] = [], skillId?: string): T {
+  if (skillId && TOOL_TERMS[skillId]) return t; // tool tags were validated by the tool rule (literal name / whitelist)
+  if (t.evidence_type !== '原文明确' || !t.evidence_quote || !quoteIsCourseList(t.evidence_quote, courseName, otherNames)) return t;
+  if (t.review_reason?.includes(COURSE_LIST_REASON)) return { ...t, evidence_type: '课名推断', needs_review: true };
+  return { ...t, evidence_type: '课名推断', needs_review: true, review_reason: t.review_reason ? `${t.review_reason}；${COURSE_LIST_REASON}` : COURSE_LIST_REASON };
+}
+
 export interface SkillRef { id: string; name: string; domain_id: string; domain_name: string; skill_type?: string }
 export interface CourseForTagging { course_id: string; name: string; course_type: string | null; credits: number | null; snippet: string | null; is_core?: number | null; table_block?: string | null }
 /** source text the tagger may quote from: excerpt sent to the model + the full text the quote is checked against */
@@ -218,6 +242,15 @@ export function parseTagResponse(text: string, courses: CourseForTagging[], skil
       const hedge = rationale.match(HEDGE);
       if (hedge) reasons.push(`理由含推测词「${hedge[0]}」`);
       seen.add(id);
+      // course-list quote: never 原文明确 (tools named literally in the course name stay; the quote is still flagged)
+      if (found && quoteIsCourseList(quote!, c.name, allNames)) {
+        if (!(term && (TOOL_NAME_LITERAL[id]?.test(c.name) || TOOL_NAME_WHITELIST[normQuote(c.name).replace(/[（(][^）)]*[）)]$/, '')]?.includes(id)))) {
+          if (term) { errors.push(`${c.name}: tool skill ${id} dropped (quote only lists course names)`); continue; }
+          if (evidence_type === '原文明确' && picked.filter((x) => x.evidence_type === '课名推断').length >= MAX_NAME_INFERRED) { droppedNameInferred++; errors.push(`${c.name}: ${id} dropped (课名推断 max ${MAX_NAME_INFERRED})`); continue; }
+          if (evidence_type === '原文明确' || s.evidence_type === '原文明确') reasons.push(COURSE_LIST_REASON);
+          evidence_type = '课名推断';
+        } else reasons.push(COURSE_LIST_REASON);
+      }
       picked.push({ course_id: c.course_id, skill_id: id, evidence_type, rationale, evidence_quote: quote, needs_review: reasons.length > 0, review_reason: reasons.length ? reasons.join('；') : null });
     }
     if (picked.length) tags.push(...picked);

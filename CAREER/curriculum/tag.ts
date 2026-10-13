@@ -14,7 +14,7 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LlmSkillTagger, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
+import { LlmSkillTagger, applyCourseListRule, mockTagProvider, normQuote, TAG_RULES_VERSION, type CourseForTagging, type SkillRef, type SkillTag, type SkillTagger, type TagEvidence, tagWeight, storedEvidenceType, CORE_NAME_VERSION, type StoredEvidenceType } from './skills.js';
 import { CURRICULUM_RAW } from './fetch.js';
 import type { DocFormat } from './manifest.js';
 import { extractText } from './text.js';
@@ -136,6 +136,10 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
     const runId = `tag:${now}`;
     const skillName = new Map(skills.map((x) => [x.id, x.name]));
     const coreCourse = new Set((db.prepare('SELECT DISTINCT course_id FROM major_course WHERE is_core = 1').all() as { course_id: string }[]).map((r) => r.course_id));
+    // expert-rejected (course, skill) pairs (014): never (re)inserted, even from the cache
+    const rejected = new Set((db.prepare("SELECT course_id || '|' || skill_id AS k FROM course_skill_rejected").all() as { k: string }[]).map((r) => r.k));
+    const groupNames = new Map<string, string[]>();
+    for (const g of groups.values()) for (const c of g) groupNames.set(c.course_id, g.map((x) => x.name));
     const write = db.transaction(() => {
       if (mock) return; // mock output is never written
       const existing = db.prepare('SELECT rowid AS rid, * FROM course_skill WHERE course_id = ?');
@@ -158,8 +162,9 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger, opts: 
         const mine = new Map(cur.filter((x) => x.reviewed === 0 && x.extraction_method === 'llm').map((x) => [x.skill_id, x]));
         const tagModel = (fresh ? model : (cur.find((x) => x.extraction_method === 'llm')?.model as string | undefined)) ?? model;
         const want = new Set<string>();
-        res.tags.forEach((x, i) => {
-          if (locked.has(x.skill_id)) return;
+        const listNames = groupNames.get(c.course_id) ?? [];
+        res.tags.map((x) => applyCourseListRule(x, c.name, listNames, x.skill_id)).forEach((x, i) => {
+          if (locked.has(x.skill_id) || rejected.has(`${c.course_id}|${x.skill_id}`)) return;
           want.add(x.skill_id);
           const st = storedEvidenceType(x.evidence_type, coreCourse.has(c.course_id), c.name, skillName.get(x.skill_id) ?? '');
           const vals = [tagWeight(st), x.rationale, t.name, tagModel, x.evidence_quote, x.needs_review ? 1 : 0, x.review_reason, st, i + 1] as const;
