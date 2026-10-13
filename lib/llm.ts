@@ -26,7 +26,7 @@ export interface ChatProvider {
   /** model identifier recorded in provenance ('mock' for the mock provider) */
   readonly model: string;
   readonly isMock: boolean;
-  chat(messages: ChatMessage[], opts?: { json?: boolean; temperature?: number }): Promise<ChatResult>;
+  chat(messages: ChatMessage[], opts?: { json?: boolean; temperature?: number; maxTokens?: number }): Promise<ChatResult>;
 }
 
 export class OpenAICompatibleProvider implements ChatProvider {
@@ -39,8 +39,9 @@ export class OpenAICompatibleProvider implements ChatProvider {
     private jsonMode = process.env.LLM_JSON_MODE !== '0',
   ) {}
 
-  async chat(messages: ChatMessage[], opts: { json?: boolean; temperature?: number } = {}): Promise<ChatResult> {
+  async chat(messages: ChatMessage[], opts: { json?: boolean; temperature?: number; maxTokens?: number } = {}): Promise<ChatResult> {
     const body: Record<string, unknown> = { model: this.model, messages, temperature: opts.temperature ?? 0 };
+    if (opts.maxTokens) body.max_tokens = opts.maxTokens;
     if (opts.json && this.jsonMode) body.response_format = { type: 'json_object' };
     for (let attempt = 0; ; attempt++) {
       const ctl = new AbortController();

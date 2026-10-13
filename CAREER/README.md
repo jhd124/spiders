@@ -209,6 +209,14 @@ npm run test:career                                                             
 
 第二阶段（课程 → 技能）：`curriculum/skills.ts` 的 `SkillTagger` 接口，目前为 `NoopSkillTagger`（二级技能未定义）。
 
+## 全量课程抽取（008，curriculum/tables.ts）
+
+- 抽取范围从「核心课/主干课」扩大到课程设置表里的全部课程（必修、限选、任选），每门课带学分、学时、学期、类别块（`table_block`）和模块（`module`）。
+- 分块：「核心课程设置」段落单独作为一块；课程表按课程类别切块，以「应修小计」作为块的结束，每块都带上表名、表头，以及竖排类别标签的碎片拼接（例如「学科/平台/基础/课程」拼成「学科平台基础课程」）。这样学分不会因为跨块或跨页而丢失。认不出课程表时，退回原来的关键词分块。
+- `major_course.course_type` 的取值现为 必修/限选/任选；005 时的「核心/主干」保留在 `core_type_legacy` 列，不再写入。
+- 核心课分两个事实分别存：`core_in_section`（课程是否列在「四、核心课程设置」里）和 `table_block`（课程在课程表里的类别块）。`is_core` 取值：1 = 段落中列出；NULL = 只有课程表把它归在「专业核心」块（待专家定规则）；0 = 两者都不是。
+- `npm run clean:career-curriculum -- --refresh` 会忽略缓存重新调用大模型。
+
 ## 课程 → 二级技能打标签（007，curriculum/skills.ts + tag.ts）
 
 - 迁移 007 写入专家给的第一批二级技能：6 个计算机相关一级域共 36 个（id 形如 `software.dsa`）。名称按专家原文，reviewed=1；`skill_type`（专业知识/工具与技术）是开发先填的，等专家确认。

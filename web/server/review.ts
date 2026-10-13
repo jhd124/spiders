@@ -35,7 +35,7 @@ review.get('/items', (c) => {
   const school = c.req.query('school_id'), major = c.req.query('major_code');
   if (!school || !major) throw new HttpError(400, 'school_id and major_code are required');
   return c.json(withDb((db) => db.prepare(`
-    SELECT mc.school_id, mc.major_code, mc.course_id, co.name, mc.course_type, mc.credits, mc.hours, mc.semester, mc.source_page,
+    SELECT mc.school_id, mc.major_code, mc.course_id, co.name, mc.course_type, mc.table_block, mc.module, mc.core_in_section, mc.is_core, mc.credits, mc.hours, mc.semester, mc.source_page,
       mc.snippet, mc.source_url, mc.model, mc.confidence, mc.review_status, mc.reviewer, mc.reviewed_at, mc.review_note, mc.plan_year
     FROM major_course mc JOIN course co ON co.id = mc.course_id
     WHERE mc.school_id = ? AND mc.major_code = ? ORDER BY mc.review_status != 'pending', mc.source_page, co.name`).all(school, major)));
@@ -54,7 +54,7 @@ review.post('/action', async (c) => {
   const reviewer = b.reviewer?.trim();
   if (!reviewer) throw new HttpError(400, 'reviewer is required');
   const e = b.edits ?? {};
-  if (e.course_type !== undefined && !['核心', '主干'].includes(e.course_type)) throw new HttpError(400, 'course_type must be 核心 or 主干');
+  if (e.course_type !== undefined && !['必修', '限选', '任选'].includes(e.course_type)) throw new HttpError(400, 'course_type must be 必修, 限选 or 任选');
   return c.json(withDb((db) => db.transaction(() => {
     const key = [b.school_id, b.major_code, b.course_id];
     const row = db.prepare('SELECT 1 FROM major_course WHERE school_id = ? AND major_code = ? AND course_id = ?').get(...key);

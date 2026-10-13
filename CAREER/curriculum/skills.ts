@@ -8,11 +8,11 @@ import type { ChatMessage, ChatProvider } from '../../lib/llm.js';
 import { MockProvider } from '../../lib/llm.js';
 import { cacheKey, type LlmCache } from './cache.js';
 
-export const TAG_PROMPT_VERSION = 'course-skill-v1';
+export const TAG_PROMPT_VERSION = 'course-skill-v2';
 export const MAX_SKILLS_PER_COURSE = 3;
 
 export interface SkillRef { id: string; name: string; domain_id: string; domain_name: string }
-export interface CourseForTagging { course_id: string; name: string; course_type: string | null; credits: number | null; snippet: string | null }
+export interface CourseForTagging { course_id: string; name: string; course_type: string | null; credits: number | null; snippet: string | null; is_core?: number | null; table_block?: string | null }
 export interface SkillTag { course_id: string; skill_id: string; rationale: string }
 export interface Untagged { course_id: string; is_core: boolean; reason: string }
 export interface TagResult {
@@ -29,13 +29,14 @@ export interface SkillTagger {
   tag(courses: CourseForTagging[], skills: SkillRef[], ctx: { school: string; major: string }): Promise<TagResult>;
 }
 
-const isCore = (c: CourseForTagging) => c.course_type === '核心';
+/** core = listed in the 核心课程 paragraph, or in the table's 专业核心 block (either fact) */
+export const isCore = (c: CourseForTagging) => c.is_core === 1 || /专业核心/.test(c.table_block ?? '');
 
 export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[], ctx: { school: string; major: string }): ChatMessage[] {
   const byDomain = new Map<string, SkillRef[]>();
   for (const s of skills) byDomain.set(`${s.domain_name}(${s.domain_id})`, [...(byDomain.get(`${s.domain_name}(${s.domain_id})`) ?? []), s]);
   const skillText = [...byDomain].map(([d, ss]) => `${d}: ${ss.map((s) => `${s.id}=${s.name}`).join('；')}`).join('\n');
-  const courseText = courses.map((c, i) => `${i + 1}. ${c.name}｜${isCore(c) ? '核心课' : c.course_type ?? '课程'}${c.credits != null ? `｜${c.credits}学分` : ''}`).join('\n');
+  const courseText = courses.map((c, i) => `${i + 1}. ${c.name}｜${[isCore(c) ? '核心课' : null, c.table_block, c.course_type].filter(Boolean).join('/') || '课程'}${c.credits != null ? `｜${c.credits}学分` : ''}`).join('\n');
   return [
     {
       role: 'system',
@@ -43,7 +44,7 @@ export function buildTagMessages(courses: CourseForTagging[], skills: SkillRef[]
         '你是高校课程与职业技能对应的标注助手。给每门课程从【技能清单】里挑选它直接教授的技能。',
         '规则：1) skill_id 只能取自技能清单中的 id，不得自造；',
         `2) 每门课挂 1~${MAX_SKILLS_PER_COURSE} 个技能，按相关度从高到低排列，只挂这门课的主要教学内容，不要因为“用到”某技能就挂上；`,
-        '3) 核心课尽量至少挂 1 个；但如果课程内容确实不对应清单中的任何技能，skills 返回空数组，并在 reason 里说明，绝不硬挂；',
+        '3) 核心课尽量至少挂 1 个；思政、英语、体育、军事、劳动等通识课与清单无关时直接返回空数组；但如果课程内容确实不对应清单中的任何技能，skills 返回空数组，并在 reason 里说明，绝不硬挂；',
         '4) 每个技能附一句不超过 40 字的 rationale，说明课程名/内容与该技能的对应关系；',
         '5) 每门课都必须出现在输出中，course 字段逐字使用给定课程名；',
         '6) 只输出 JSON，格式：{"courses":[{"course":string,"skills":[{"skill_id":string,"rationale":string}],"reason":string|null}]}',

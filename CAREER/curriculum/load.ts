@@ -15,6 +15,9 @@ import { RAW_NAME, type RawCurriculum } from './crawler.js';
 import type { CleanCurriculum } from './clean.js';
 import { normCourseName } from './extract.js';
 
+/** 1 = listed in the 核心课程 paragraph, NULL = only the table block says 专业核心 (expert rule pending), 0 = neither */
+export const isCoreValue = (c: { core_in_section: boolean; block: string | null }) => (c.core_in_section ? 1 : c.block && /专业核心/.test(c.block) ? null : 0);
+
 const readJsonSync = <T>(p: string): T => JSON.parse(readFileSync(p, 'utf8')) as T;
 
 export function ingestCurriculum(db: Database.Database, opts: { manifest?: string } = {}) {
@@ -77,16 +80,16 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
   }
 
   const upCourse = db.prepare(`INSERT INTO course (id, school_id, name, credits, hours, course_type, source_url, fetched_at, extraction_method, confidence, reviewed, model, source_doc_id)
-    VALUES (@id, @school_id, @name, @credits, @hours, @course_type, @source_url, @fetched_at, 'llm', @confidence, 0, @model, @source_doc_id)
-    ON CONFLICT (id) DO UPDATE SET credits=COALESCE(excluded.credits, course.credits), hours=COALESCE(excluded.hours, course.hours), source_url=excluded.source_url, fetched_at=excluded.fetched_at,
+    VALUES (@id, @school_id, @name, @credits, @hours, @block, @source_url, @fetched_at, 'llm', @confidence, 0, @model, @source_doc_id)
+    ON CONFLICT (id) DO UPDATE SET credits=COALESCE(excluded.credits, course.credits), course_type=COALESCE(excluded.course_type, course.course_type), hours=COALESCE(excluded.hours, course.hours), source_url=excluded.source_url, fetched_at=excluded.fetched_at,
       confidence=excluded.confidence, model=excluded.model, source_doc_id=excluded.source_doc_id
     WHERE course.extraction_method = 'llm' AND course.reviewed = 0`);
   const upMc = db.prepare(`INSERT INTO major_course (school_id, major_code, course_id, plan_year, semester, is_core, source_url, fetched_at, extraction_method, confidence, reviewed,
-      course_type, credits, hours, curriculum_source_id, source_doc_id, source_page, snippet, model, review_status)
-    VALUES (@school_id, @major_code, @course_id, @plan_year, @semester, 1, @source_url, @fetched_at, 'llm', @confidence, 0,
-      @course_type, @credits, @hours, @curriculum_source_id, @source_doc_id, @source_page, @snippet, @model, 'pending')
+      course_type, core_in_section, table_block, module, credits, hours, curriculum_source_id, source_doc_id, source_page, snippet, model, review_status)
+    VALUES (@school_id, @major_code, @course_id, @plan_year, @semester, @is_core, @source_url, @fetched_at, 'llm', @confidence, 0,
+      @course_type, @core_in_section, @table_block, @module, @credits, @hours, @curriculum_source_id, @source_doc_id, @source_page, @snippet, @model, 'pending')
     ON CONFLICT (school_id, major_code, course_id) DO UPDATE SET plan_year=excluded.plan_year, semester=excluded.semester, source_url=excluded.source_url, fetched_at=excluded.fetched_at,
-      confidence=excluded.confidence, course_type=excluded.course_type, credits=excluded.credits, hours=excluded.hours, curriculum_source_id=excluded.curriculum_source_id,
+      confidence=excluded.confidence, is_core=excluded.is_core, course_type=excluded.course_type, core_in_section=excluded.core_in_section, table_block=excluded.table_block, module=excluded.module, credits=excluded.credits, hours=excluded.hours, curriculum_source_id=excluded.curriculum_source_id,
       source_doc_id=excluded.source_doc_id, source_page=excluded.source_page, snippet=excluded.snippet, model=excluded.model
     WHERE major_course.review_status = 'pending'`);
   let loaded = 0, skippedMock = 0;
@@ -99,11 +102,16 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
     if (!majors.has(r.major_code)) continue;
     for (const c of r.courses) {
       const courseId = `${s.schoolId}:${normCourseName(c.name)}`;
-      upCourse.run({ id: courseId, school_id: s.schoolId, name: c.name, credits: c.credits, hours: c.hours, course_type: c.course_type, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence, model: r.model, source_doc_id: s.docId });
+      upCourse.run({ id: courseId, school_id: s.schoolId, name: c.name, credits: c.credits, hours: c.hours, block: c.block, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence, model: r.model, source_doc_id: s.docId });
       upMc.run({ school_id: s.schoolId, major_code: r.major_code, course_id: courseId, plan_year: s.year, semester: c.semester, source_url: r.url, fetched_at: s.fetchedAt, confidence: c.confidence,
-        course_type: c.course_type, credits: c.credits, hours: c.hours, curriculum_source_id: r.source_id, source_doc_id: s.docId, source_page: c.page, snippet: c.snippet, model: r.model });
+        course_type: c.course_type, core_in_section: c.core_in_section ? 1 : 0, table_block: c.block, module: c.module, is_core: isCoreValue(c), credits: c.credits, hours: c.hours, curriculum_source_id: r.source_id, source_doc_id: s.docId, source_page: c.page, snippet: c.snippet, model: r.model });
       loaded++;
     }
+    // a pending row of this source/major that the latest extraction no longer produces is stale -> delete
+    const ids = r.courses.map((c) => `${s.schoolId}:${normCourseName(c.name)}`);
+    const stale = db.prepare(`DELETE FROM major_course WHERE curriculum_source_id = ? AND major_code = ? AND review_status = 'pending' AND course_id NOT IN (SELECT value FROM json_each(?))`)
+      .run(r.source_id, r.major_code, JSON.stringify(ids)).changes;
+    if (stale) console.log(`[career] curriculum: ${r.school} ${r.major_code}: removed ${stale} stale pending rows`);
   }
   // stage 2 (course -> skill tagging) runs after ingest: CAREER/post_ingest.ts -> curriculum/tag.ts
   console.log(`[career] curriculum: manifest ${synced} sources, upserted ${loaded} major_course rows${skippedMock ? `, skipped ${skippedMock} MOCK courses (not ingested)` : ''}, skill tagging runs next (post_ingest)`);

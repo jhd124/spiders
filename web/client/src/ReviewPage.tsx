@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 interface Group { school_id: string; school_name: string; major_code: string; major_name: string | null; total: number; pending: number; approved: number; rejected: number; edited: number }
 interface Item {
-  school_id: string; major_code: string; course_id: string; name: string; course_type: string | null; credits: number | null; hours: number | null;
+  school_id: string; major_code: string; course_id: string; name: string; course_type: string | null; table_block: string | null; module: string | null; core_in_section: number; is_core: number | null; credits: number | null; hours: number | null;
   semester: string | null; source_page: number | null; snippet: string | null; source_url: string; model: string | null; confidence: number | null;
   review_status: string; reviewer: string | null; reviewed_at: string | null; review_note: string | null;
 }
@@ -17,7 +17,7 @@ async function j<T>(path: string, init?: RequestInit): Promise<T> {
 const STATUS: Record<string, string> = { pending: '待审', approved: '通过', rejected: '驳回', edited: '已改' };
 const pdfLink = (url: string, page: number | null) => (page && /\.pdf|download/i.test(url) ? `${url}#page=${page}` : url);
 
-/** #/review — spot-check LLM-extracted 专业核心课/主干课 per school + major. */
+/** #/review — spot-check LLM-extracted courses (all table rows + 核心课程 paragraph) per school + major. */
 export function ReviewPage({ sel }: { sel?: string }) {
   const [groups, setGroups] = useState<Group[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -56,7 +56,7 @@ export function ReviewPage({ sel }: { sel?: string }) {
 
   return (
     <div className="review">
-      <h2>培养方案核心课 · 人工抽检</h2>
+      <h2>培养方案课程 · 人工抽检</h2>
       <p className="muted small">LLM 抽取结果（extraction_method=llm, reviewed=0）。逐条对照原文片段与 PDF 页码：通过 / 驳回 / 修改。Mock 结果不会入库，这里只会出现真实模型的抽取。</p>
       <label>审核人 <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="姓名" /></label>
       {err && <div className="error">{err}</div>}
@@ -80,12 +80,12 @@ export function ReviewPage({ sel }: { sel?: string }) {
         <section style={{ flex: 1 }}>
           {items.length > 0 && (
             <table className="table">
-              <thead><tr><th>课程</th><th>类型</th><th>学分</th><th>学时</th><th>学期</th><th>原文（页码）</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead>
+              <thead><tr><th>课程</th><th>类别块 / 类型</th><th>学分</th><th>学时</th><th>学期</th><th>原文（页码）</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead>
               <tbody>
                 {items.map((it) => editing === it.course_id ? (
                   <tr key={it.course_id}>
                     <td><input defaultValue={it.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></td>
-                    <td><select defaultValue={it.course_type ?? '核心'} onChange={(e) => setDraft({ ...draft, course_type: e.target.value })}><option>核心</option><option>主干</option></select></td>
+                    <td><select defaultValue={it.course_type ?? '必修'} onChange={(e) => setDraft({ ...draft, course_type: e.target.value })}><option>必修</option><option>限选</option><option>任选</option></select></td>
                     <td><input size={3} defaultValue={it.credits ?? ''} onChange={(e) => setDraft({ ...draft, credits: numOrNull(e.target.value) })} /></td>
                     <td><input size={3} defaultValue={it.hours ?? ''} onChange={(e) => setDraft({ ...draft, hours: numOrNull(e.target.value) })} /></td>
                     <td><input size={3} defaultValue={it.semester ?? ''} onChange={(e) => setDraft({ ...draft, semester: e.target.value || null })} /></td>
@@ -96,7 +96,7 @@ export function ReviewPage({ sel }: { sel?: string }) {
                 ) : (
                   <tr key={it.course_id}>
                     <td>{it.name}</td>
-                    <td>{it.course_type}</td>
+                    <td>{it.table_block ?? '—'}{it.module ? ` · ${it.module}` : ''} / {it.course_type ?? '—'}{it.core_in_section ? <span className="small"> · 四核心</span> : null}</td>
                     <td>{it.credits ?? '—'}</td>
                     <td>{it.hours ?? '—'}</td>
                     <td>{it.semester ?? '—'}</td>

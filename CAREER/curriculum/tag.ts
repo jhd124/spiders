@@ -13,6 +13,8 @@ import { CAREER_DB } from '../db.js';
 import { SqliteLlmCache } from './cache.js';
 import { LlmSkillTagger, mockTagProvider, TAG_PROMPT_VERSION, type CourseForTagging, type SkillRef, type SkillTagger, type TagResult } from './skills.js';
 
+const BATCH = Number(process.env.TAG_BATCH ?? 30);
+
 export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[] }
 
 export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger): Promise<TagRunSummary> {
@@ -23,7 +25,7 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger): Promi
       FROM skill s JOIN skill_domain d ON d.id = s.primary_domain_id ORDER BY d.sort_order, s.id`).all() as SkillRef[];
     const t = tagger ?? new LlmSkillTagger(providerFromEnv(mockTagProvider(skills)), new SqliteLlmCache(db));
     const mock = t.name === 'mock';
-    const rows = db.prepare(`SELECT mc.school_id, mc.major_code, c.id AS course_id, c.name, mc.course_type, COALESCE(mc.credits, c.credits) AS credits, mc.snippet,
+    const rows = db.prepare(`SELECT mc.school_id, mc.major_code, c.id AS course_id, c.name, mc.course_type, mc.is_core, mc.table_block, COALESCE(mc.credits, c.credits) AS credits, mc.snippet,
         COALESCE(s.name, mc.school_id) AS school, COALESCE(m.name, mc.major_code) AS major
       FROM major_course mc JOIN course c ON c.id = mc.course_id LEFT JOIN school s ON s.id = mc.school_id LEFT JOIN major m ON m.code = mc.major_code
       WHERE mc.review_status <> 'rejected' ORDER BY mc.school_id, mc.major_code, mc.source_page, c.name`).all() as (CourseForTagging & { school_id: string; major_code: string; school: string; major: string })[];
@@ -36,10 +38,13 @@ export async function tagSkills(dbPath = CAREER_DB, tagger?: SkillTagger): Promi
     const results: { courses: typeof rows; r: TagResult }[] = [];
     for (const g of groups.values()) {
       // a course shared by several majors of one school is tagged per major; first result wins when writing
-      const r = await t.tag(g, skills, { school: g[0]!.school, major: `${g[0]!.major}（${g[0]!.major_code}）` });
-      results.push({ courses: g, r });
+      for (let i = 0; i < g.length; i += BATCH) {
+      const part = g.slice(i, i + BATCH);
+      const r = await t.tag(part, skills, { school: g[0]!.school, major: `${g[0]!.major}（${g[0]!.major_code}）` });
+      results.push({ courses: part, r });
       sum.prompt_tokens += r.stats.prompt_tokens; sum.completion_tokens += r.stats.completion_tokens;
       sum.llm_calls += r.stats.llm_calls; sum.cached += r.stats.cached; sum.errors.push(...r.errors);
+      }
     }
     const names = new Map(rows.map((r) => [r.course_id, r.name]));
     const done = new Set<string>();

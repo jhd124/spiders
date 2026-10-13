@@ -8,7 +8,7 @@ import { DATA_DIR, writeJson } from '../../lib/io.js';
 import { join } from 'node:path';
 import { providerFromEnv } from '../../lib/llm.js';
 import { MemoryCache } from './cache.js';
-import { extractCourses, mockProvider, chunkPages, RELEVANT } from './extract.js';
+import { extractCourses, mockProvider, planChunks } from './extract.js';
 import { fetchFile } from './fetch.js';
 import { sourceId, type DocFormat } from './manifest.js';
 import { planUnits } from './plan.js';
@@ -24,8 +24,8 @@ const { meta, data } = await fetchFile('try-' + sourceId(url), url, format, arg(
 const pages = await extractText(data, format);
 const quality = textQuality(pages);
 console.log(`[try] ${meta.bytes} bytes sha256 ${meta.sha256.slice(0, 12)}…`, JSON.stringify(quality));
-const chunks = chunkPages(pages);
-console.log(`[try] chunks ${chunks.length}, relevant (would be sent to the LLM) ${chunks.filter((c) => RELEVANT.test(c.text)).length}, ~${Math.round(chunks.filter((c) => RELEVANT.test(c.text)).reduce((n, c) => n + c.text.length, 0) / 1.5)} input tokens est.`);
+const chunks = planChunks(pages);
+console.log(`[try] LLM units ${chunks.length} (${chunks.map((c) => c.kind).join(',')}), ~${Math.round(chunks.reduce((n, c) => n + c.text.length, 0) / 1.5)} input tokens est.`);
 const provider = providerFromEnv(mockProvider());
 const plan = planUnits({ major_code: major }, pages);
 console.log(`[try] major sections found: ${plan.sections.length}`);
@@ -36,7 +36,7 @@ for (const u of plan.units) {
   const r = await extractCourses(u.pages, { school, majorCode: u.major_code, majorName: u.section?.major_name ?? u.major_code }, provider, new MemoryCache());
   results.push({ major_code: u.major_code, section: u.section, ...r });
   console.log(`[try] ${u.major_code}${u.section ? ` p${u.section.page_start}-${u.section.page_end}` : ''}: provider ${provider.model}${provider.isMock ? ' (MOCK — not real data)' : ''}: ${r.courses.length} courses, chunks ${r.stats.sent}/${r.stats.chunks} sent`);
-  for (const c of r.courses) console.log(`  p${c.page} [${c.course_type}] ${c.name}${c.credits != null ? ` ${c.credits}学分` : ''}  «${c.snippet}»`);
+  for (const c of r.courses) console.log(`  p${c.page} [${c.block ?? '-'}/${c.course_type ?? '-'}${c.core_in_section ? '/四核心' : ''}] ${c.name}${c.credits != null ? ` ${c.credits}学分` : ''}  «${c.snippet}»`);
 }
 const outPath = join(DATA_DIR, 'tmp', 'curriculum-try.json');
 await writeJson(outPath, { url, meta, quality, sections: plan.sections, results, pages });

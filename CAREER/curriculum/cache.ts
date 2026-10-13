@@ -24,7 +24,7 @@ export class SqliteLlmCache implements LlmCache {
   set(k: string, v: { model: string; promptVersion: string; response: string; promptTokens?: number; completionTokens?: number }) {
     this.db
       .prepare(`INSERT INTO llm_cache (cache_key, model, prompt_version, response, prompt_tokens, completion_tokens, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (cache_key) DO NOTHING`)
+                VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (cache_key) DO UPDATE SET response = excluded.response, prompt_tokens = excluded.prompt_tokens, completion_tokens = excluded.completion_tokens, created_at = excluded.created_at`)
       .run(k, v.model, v.promptVersion, v.response, v.promptTokens ?? null, v.completionTokens ?? null, new Date().toISOString());
   }
 }

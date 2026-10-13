@@ -25,12 +25,14 @@ const ctx = { school: '测试大学', majorCode: '080901', majorName: '计算机
 
 test('schema: valid items kept, invalid ones reported', () => {
   const r = validateExtraction({ courses: [
-    { name: '操作系统', course_type: '核心', credits: 4, hours: '72', semester: '4', page: 3, snippet: '操作系统 | 4', confidence: 0.9 },
-    { name: '体育', course_type: '选修', credits: 1, hours: null, semester: null, page: 1, snippet: '体育', confidence: 0.5 },
+    { name: '操作系统', course_type: '必修', block: '专业基础课程', credits: 4, hours: '72', semester: '4', page: 3, snippet: '操作系统 | 4', confidence: 0.9 },
+    { name: '体育', course_type: '核心', credits: 1, hours: null, semester: null, page: 1, snippet: '体育', confidence: 0.5 },
     { name: 'x', course_type: '核心', page: 0, snippet: '', confidence: 2 },
   ] });
   assert.equal(r.courses.length, 1);
   assert.equal(r.courses[0]!.hours, 72);
+  assert.equal(r.courses[0]!.block, '专业基础课程');
+  assert.equal(r.courses[0]!.core_in_section, false);
   assert.equal(r.errors.length, 2);
   assert.deepEqual(validateExtraction([]).courses, []);
 });
@@ -63,14 +65,15 @@ const fake = (payload: unknown) => {
 
 test('hallucinated snippets are dropped; duplicates merged; cache avoids a second paid call', async () => {
   const { p, calls } = fake({ courses: [
-    { name: '操作系统', course_type: '主干', credits: null, hours: null, semester: null, page: 2, snippet: '数据结构与算法、操作系统', confidence: 0.7 },
-    { name: '操作系统', course_type: '核心', credits: 4, hours: 72, semester: '4', page: 3, snippet: 'sd01 操作系统 4 72', confidence: 0.95 },
-    { name: '量子计算', course_type: '核心', credits: 3, hours: null, semester: null, page: 2, snippet: '量子计算导论', confidence: 0.9 },
+    { name: '操作系统', course_type: null, credits: null, hours: null, semester: null, page: 2, snippet: '数据结构与算法、操作系统', confidence: 0.7 },
+    { name: '操作系统', course_type: '必修', block: '专业基础课程', credits: 4, hours: 72, semester: '4', page: 3, snippet: 'sd01 | 操作系统 | 4 | 72', confidence: 0.95 },
+    { name: '量子计算', course_type: '必修', credits: 3, hours: null, semester: null, page: 2, snippet: '量子计算导论', confidence: 0.9 },
   ] });
   const cache = new MemoryCache();
   const r1 = await extractCourses(PAGES, ctx, p, cache);
   assert.equal(r1.courses.length, 1);
-  assert.equal(r1.courses[0]!.course_type, '核心');
+  assert.equal(r1.courses[0]!.course_type, '必修');
+  assert.equal(r1.courses[0]!.core_in_section, true, 'listed in 四、核心课程设置');
   assert.equal(r1.courses[0]!.credits, 4);
   assert.ok(r1.stats.dropped_unverified >= 1);
   const n = calls();
@@ -127,7 +130,7 @@ test('ingest: mock results are never stored; real results are, and reviews survi
   mkdirSync(join(TMP, 'raw'), { recursive: true });
   mkdirSync(join(TMP, 'clean'), { recursive: true });
   writeFileSync(join(TMP, 'raw', 'career-curriculum.json'), JSON.stringify({ docs: [{ source: { id }, meta: { sha256: 'ab'.repeat(32), bytes: 1, fetched_at: 't', url } }] }));
-  const course = { name: '操作系统', course_type: '核心', credits: 4, hours: 72, semester: '4', page: 3, snippet: '操作系统 | 4', confidence: 0.9 };
+  const course = { name: '操作系统', course_type: '必修', block: '专业核心课程', module: null, core_in_section: false, credits: 4, hours: 72, semester: '4', page: 3, snippet: '操作系统 | 4', confidence: 0.9 };
   const writeClean = (mock: boolean) => writeFileSync(join(TMP, 'clean', 'career-curriculum.json'), JSON.stringify({ results: [{ source_id: id, school: '测试大学', major_code: '080901', doc_sha256: 'ab'.repeat(32), url, model: mock ? 'mock' : 'fake-model', mock, courses: [course] }] }));
   const count = () => (db.prepare('SELECT COUNT(*) n FROM major_course').get() as { n: number }).n;
 
@@ -143,6 +146,10 @@ test('ingest: mock results are never stored; real results are, and reviews survi
   assert.equal(row.reviewed, 0);
   assert.equal(row.model, 'fake-model');
   assert.equal(row.source_page, 3);
+  assert.equal(row.course_type, '必修');
+  assert.equal(row.table_block, '专业核心课程');
+  assert.equal(row.core_in_section, 0);
+  assert.equal(row.is_core, null, 'table block alone does not decide core');
   assert.ok(String(row.source_doc_id).startsWith('curriculum:'));
 
   db.prepare("UPDATE major_course SET review_status='edited', reviewed=1, credits=5, reviewer='专家'").run();
@@ -226,9 +233,9 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
     { id: 'ai.dl', name: '深度学习', domain_id: 'ai', domain_name: '人工智能' },
   ];
   const courses = [
-    { course_id: 'a', name: '数据结构与算法', course_type: '核心', credits: 4, snippet: null },
-    { course_id: 'b', name: '毕业论文（设计）', course_type: '核心', credits: 7, snippet: null },
-    { course_id: 'c', name: '人工智能引论', course_type: '主干', credits: 3, snippet: null },
+    { course_id: 'a', name: '数据结构与算法', course_type: '必修', credits: 4, snippet: null, is_core: 1 },
+    { course_id: 'b', name: '毕业论文（设计）', course_type: '必修', credits: 7, snippet: null, is_core: null, table_block: '专业核心课程' },
+    { course_id: 'c', name: '人工智能引论', course_type: '必修', credits: 3, snippet: null, is_core: 0 },
   ];
   const resp = JSON.stringify({ courses: [
     { course: '数据结构与算法', skills: [{ skill_id: 'software.dsa', rationale: 'x' }, { skill_id: 'made.up', rationale: 'y' }] },
@@ -250,7 +257,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   const db = new Database(process.env.CAREER_DB!);
   db.pragma('foreign_keys = OFF');
   db.prepare("INSERT OR IGNORE INTO course (id, school_id, name, source_url, extraction_method) VALUES ('s:数据结构与算法', 's', '数据结构与算法', 'u', 'llm')").run();
-  db.prepare("INSERT OR IGNORE INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type) VALUES ('s', '080901', 's:数据结构与算法', 'u', 'llm', '核心')").run();
+  db.prepare("INSERT OR IGNORE INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('s', '080901', 's:数据结构与算法', 'u', 'llm', '必修', 1)").run();
   db.close();
   const s = await tagSkills(process.env.CAREER_DB!, new LlmSkillTagger(mockTagProvider(skills), new MemoryCache()));
   assert.equal(s.mock, true);
@@ -259,4 +266,24 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
   assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 36);
   db2.close();
+});
+
+test('table chunking: one unit per 课程类别 block, label fragments kept, subtotals close blocks', async () => {
+  const { segmentTableBlocks, findCoreSection } = await import('../tables.js');
+  const { planChunks, typeFromBlock } = await import('../extract.js');
+  const pages = [
+    { page: 1, text: '四、核心课程设置\n计算概论、离散数学、计\n算机网络。\n五、主要实践性教学环节\n十、课程设置及学时分配表\n（二）专业培养计划--专业教育课程\n课程类别 | 课程号 | 课程名称 | 分 | 学\n学时 | 学时' },
+    { page: 2, text: 'sd1 | 计算概论 | 2 | 32 | 32 | 考试 | 1\n学科 | sd2 | 线性代数 | 3 | 48 | 48 | 考试 | 1\n平台\n基础\n课程\n应修小计 | 5 | 80\nsd3 | 离散数学 | 4 | 64 | 64 | 考试 | 2\n专业 | sd4 | 计算机网络 | 3 | 64 | 32 | 32 | 考试 | 3\n基础\n业 | 应修小计 | 7 | 128\n十一、课程与毕业要求对应关系\nsd9 | 不是课程 | 1 | 1' },
+  ];
+  assert.match(findCoreSection(pages)!.text, /计\n算机网络/);
+  const blocks = segmentTableBlocks(pages);
+  assert.equal(blocks.length, 2);
+  assert.deepEqual(blocks.map((b) => b.rows.length), [2, 2]);
+  assert.equal(blocks[0]!.label_hint, '学科平台基础课程');
+  assert.match(blocks[1]!.label_hint, /^专业基础/);
+  assert.equal(blocks[0]!.table_title, '（二）专业培养计划--专业教育课程');
+  const units = planChunks(pages);
+  assert.deepEqual(units.map((u) => u.kind), ['core_section', 'table_block', 'table_block']);
+  assert.equal(typeFromBlock('专业限选课程', '必修'), '限选');
+  assert.equal(typeFromBlock('专业核心课程', null), null);
 });

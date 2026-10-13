@@ -1,8 +1,8 @@
 /**
- * LLM stage: extract 专业核心课/主干课 from each fetched 培养方案 -> data/clean/career-curriculum.json.
+ * LLM stage: extract every course (table + 核心课程 paragraph) from each fetched 培养方案 -> data/clean/career-curriculum.json.
  * Uses the real provider when LLM_BASE_URL / LLM_API_KEY / LLM_MODEL are set, otherwise the offline mock
  * (results flagged mock=true; ingest skips them). Responses are cached in career.db (llm_cache).
- *   npm run clean:career-curriculum [-- --max-calls=50]   # hard cap on paid LLM calls per run
+ *   npm run clean:career-curriculum [-- --max-calls=50] [-- --refresh]   # cap on paid calls; --refresh ignores cached responses
  */
 import { existsSync } from 'node:fs';
 import Database from 'better-sqlite3';
@@ -23,6 +23,7 @@ export interface CleanCurriculum {
 }
 
 export async function clean(argv = process.argv.slice(2)) {
+  const refresh = argv.includes('--refresh');
   const maxCalls = Number(argv.find((a) => a.startsWith('--max-calls='))?.slice(12) ?? process.env.LLM_MAX_CALLS ?? 200);
   if (!existsSync(rawPath(RAW_NAME))) {
     console.log(`[${RAW_NAME}] nothing fetched yet`);
@@ -48,7 +49,7 @@ export async function clean(argv = process.argv.slice(2)) {
         const name = majorName(u.major_code);
         if (!name) { console.error(`[${RAW_NAME}] unknown major_code ${u.major_code} (not in major table)`); continue; }
         if (!provider.isMock && calls >= maxCalls) { console.warn(`[${RAW_NAME}] --max-calls=${maxCalls} reached, stopping`); break; }
-        const r = await extractCourses(u.pages, { school: d.source.school, majorCode: u.major_code, majorName: name }, provider, cache);
+        const r = await extractCourses(u.pages, { school: d.source.school, majorCode: u.major_code, majorName: name }, provider, cache, { refresh });
         calls += r.stats.llm_calls;
         out.results.push({ source_id: d.source.id, school: d.source.school, major_code: u.major_code, section: u.section, doc_sha256: d.meta.sha256, url: d.source.url, ...r });
         console.log(`[${RAW_NAME}] ${d.source.school} ${u.major_code}${u.section ? ` (p${u.section.page_start}-${u.section.page_end})` : ''}: ${r.courses.length} courses (chunks ${r.stats.sent}/${r.stats.chunks} sent, ${r.stats.cached} cached, ${r.stats.llm_calls} calls, ${r.stats.dropped_unverified} unverified dropped, tokens ${r.stats.prompt_tokens}+${r.stats.completion_tokens})`);
