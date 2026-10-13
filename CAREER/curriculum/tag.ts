@@ -117,43 +117,54 @@ export const aliasNorm = (s: string) => s.replace(/\s+/g, '').replace(/[（(][^�
  * 工具与技术 -> 原文明确 1.0 (the tool is literally in the course name). Never touches an existing row (LLM, reviewed or other rule)
  * or an expert-rejected pair; unreviewed rule:alias rows whose alias is gone are deleted. Idempotent.
  */
-export function applyAliasTags(db: Database.Database): { inserted: number; deleted: number; updated: number } {
+export interface AliasTagStats { matched: number; inserted: number; took_over: number; kept: number; rejected: number; deleted: number; updated: number }
+export function applyAliasTags(db: Database.Database): AliasTagStats {
   const aliases = (db.prepare(`SELECT a.alias, a.skill_id, s.name AS skill, s.skill_type FROM skill_alias a JOIN skill s ON s.id = a.skill_id`).all() as { alias: string; skill_id: string; skill: string; skill_type: string }[])
     .map((a) => ({ ...a, n: aliasNorm(a.alias) })).filter((a) => a.n.length >= 2);
   const courses = db.prepare(`SELECT c.id, c.name, MAX(mc.is_core = 1) AS core FROM major_course mc JOIN course c ON c.id = mc.course_id
     WHERE mc.review_status <> 'rejected' GROUP BY c.id`).all() as { id: string; name: string; core: number }[];
   const rejected = new Set((db.prepare("SELECT course_id || '|' || skill_id AS k FROM course_skill_rejected").all() as { k: string }[]).map((r) => r.k));
-  const cur = db.prepare('SELECT rowid AS rid, source, reviewed, evidence_type FROM course_skill WHERE course_id = ? AND skill_id = ?');
+  const cur = db.prepare('SELECT rowid AS rid, source, reviewed, evidence_type, weight, needs_review FROM course_skill WHERE course_id = ? AND skill_id = ?');
+  // root cause of "alias tags +0" on the server (0a4f5d8): the LLM had already tagged e.g. 代数与几何C -> 线性代数 from a table row, and the
+  // course-list rule flagged it needs_review (not scored). The alias pass skipped every pair that had ANY row, so the flagged row stayed.
+  // Now an unreviewed non-rule row that is flagged or weaker is taken over by the alias rule (the expert alias is the stronger evidence).
+  const takeOver = db.prepare(`UPDATE course_skill SET weight = ?, evidence_type = ?, rationale = ?, source = 'rule:alias', extraction_method = 'pdf_parse', model = NULL,
+    evidence_quote = ?, needs_review = 0, review_reason = NULL, tagged_at = ? WHERE rowid = ? AND reviewed = 0`);
   const ins = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, confidence, reviewed, rationale, source, model, tagged_at, evidence_quote, needs_review, review_reason, evidence_type, tag_rank)
     VALUES (?, ?, ?, 'pdf_parse', NULL, 0, ?, 'rule:alias', NULL, ?, ?, 0, NULL, ?, NULL) ON CONFLICT (course_id, skill_id) DO NOTHING`);
   const upd = db.prepare('UPDATE course_skill SET weight = ?, evidence_type = ?, rationale = ? WHERE rowid = ?');
   const want = new Set<string>();
-  let inserted = 0, updated = 0;
+  let inserted = 0, updated = 0, matched = 0, tookOver = 0, kept = 0, rej = 0;
   const now = new Date().toISOString();
   for (const c of courses) {
     const cn = aliasNorm(c.name);
     for (const a of aliases) {
-      if (!cn.includes(a.n) || rejected.has(`${c.id}|${a.skill_id}`)) continue;
+      if (!cn.includes(a.n)) continue;
+      matched++;
+      if (rejected.has(`${c.id}|${a.skill_id}`)) { rej++; continue; }
       const k = `${c.id}|${a.skill_id}`;
       if (want.has(k)) continue;
       want.add(k);
       const et: StoredEvidenceType = a.skill_type === '工具与技术' ? '原文明确' : c.core ? '核心课名' : '课名推断';
       const why = `课程名${cn === a.n ? '即' : '含'}别名「${a.alias}」→ 技能「${a.skill}」（专家别名规则）`;
-      const old = cur.get(c.id, a.skill_id) as { rid: number; source: string; reviewed: number; evidence_type: string } | undefined;
+      const old = cur.get(c.id, a.skill_id) as { rid: number; source: string | null; reviewed: number; evidence_type: string; weight: number | null; needs_review: number } | undefined;
       if (!old) inserted += ins.run(c.id, a.skill_id, tagWeight(et), why, now, c.name, et).changes;
-      else if (old.source === 'rule:alias' && old.reviewed === 0 && old.evidence_type !== et) updated += upd.run(tagWeight(et), et, why, old.rid).changes;
+      else if (old.source === 'rule:alias') { if (old.reviewed === 0 && old.evidence_type !== et) updated += upd.run(tagWeight(et), et, why, old.rid).changes; }
+      else if (old.reviewed === 0 && !(old.source ?? '').startsWith('rule:') && (old.needs_review === 1 || (old.weight ?? 0) < tagWeight(et)))
+        tookOver += takeOver.run(tagWeight(et), et, why, c.name, now, old.rid).changes;
+      else kept++;
     }
   }
   let deleted = 0;
   for (const r of db.prepare("SELECT rowid AS rid, course_id, skill_id FROM course_skill WHERE source = 'rule:alias' AND reviewed = 0").all() as { rid: number; course_id: string; skill_id: string }[])
     if (!want.has(`${r.course_id}|${r.skill_id}`)) deleted += db.prepare('DELETE FROM course_skill WHERE rowid = ?').run(r.rid).changes;
-  if (inserted || deleted) db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
-  return { inserted, deleted, updated };
+  if (inserted || deleted || tookOver) db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
+  return { matched, inserted, took_over: tookOver, kept, rejected: rej, deleted, updated };
 }
 
 interface CourseResult { tags: SkillTag[]; untagged: { is_core: boolean; reason: string } | null }
 
-export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name_added?: { inserted: number; deleted: number }; alias_added?: { inserted: number; deleted: number; updated: number }; core_name: { checked: number; updated: number; core_name: number } }
+export interface TagRunSummary { tagger: string; mock: boolean; groups: number; courses: number; retagged: number; reused: number; tags: number; untagged: { course_id: string; name: string; is_core: boolean; reason: string }[]; prompt_tokens: number; completion_tokens: number; llm_calls: number; cached: number; errors: string[]; needs_review: number; rows_inserted: number; rows_updated: number; rows_deleted: number; core_name_added?: { inserted: number; deleted: number }; alias_added?: AliasTagStats; core_name: { checked: number; updated: number; core_name: number } }
 
 /**
  * Stability contract (expert, 2026-10-13):

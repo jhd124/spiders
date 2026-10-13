@@ -7,6 +7,9 @@
  *  - never overwrites a major_course row the expert already approved/rejected/edited
  */
 import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseCsv } from '../../lib/csv.js';
 import type Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { cleanPath, rawPath } from '../../lib/io.js';
@@ -131,6 +134,8 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
   }
   const typed = backfillImpliedTypes(db);
   if (typed) console.log(`[career] curriculum: ${typed} null course_type filled from the table block (impliedType)`);
+  const bt = applyBlockTypeConfig(db);
+  if (bt.updated || bt.unmatched.length) console.log(`[career] curriculum: block type config: ${bt.updated} rows set${bt.unmatched.length ? `; ERROR no rows for ${bt.unmatched.join(', ')}` : ''}`);
   // stage 2 (course -> skill tagging) runs after ingest: CAREER/post_ingest.ts -> curriculum/tag.ts
   console.log(`[career] curriculum: manifest ${synced} sources, upserted ${loaded} major_course rows${repaired ? `, refreshed source facts (core/block/type) on ${repaired} reviewed rows` : ''}${skippedMock ? `, skipped ${skippedMock} MOCK courses (not ingested)` : ''}, skill tagging runs next (post_ingest)`);
 }
@@ -147,4 +152,32 @@ export function backfillImpliedTypes(db: Database.Database): number {
     if (t) n += upd.run(t, r.rid).changes;
   }
   return n;
+}
+
+export const BLOCK_TYPES_CSV = join(dirname(fileURLToPath(import.meta.url)), '..', 'seeds', 'curriculum_block_types.csv');
+
+/**
+ * Expert per-source course_type of a whole table block (seeds/curriculum_block_types.csv: school, major_code, table_block,
+ * course_type, verified_by, note). Used where the block name alone is ambiguous: e.g. HIT-WH 专业方向选修课表一 (choose 4 credits from
+ * 6 courses) = 限选, 表二 = 任选 although its text also says 选择4学分 — so there is deliberately NO generic "选N学分" detector.
+ * major_code '*' = every major of that school. Rows edited by a reviewer (review_status 'edited') are never changed. Unconfigured
+ * blocks keep the parser's type. A config row matching no stored row is reported (typo / renamed block). Idempotent.
+ */
+export function applyBlockTypeConfig(db: Database.Database, path = BLOCK_TYPES_CSV): { updated: number; matched: number; unmatched: string[] } {
+  if (!existsSync(path)) return { updated: 0, matched: 0, unmatched: [] };
+  const rows = parseCsv(readFileSync(path, 'utf8'));
+  const unmatched: string[] = [];
+  let updated = 0, matched = 0;
+  for (const r of rows) {
+    const t = r.course_type?.trim();
+    if (!r.school?.trim() || !r.table_block?.trim() || !['必修', '限选', '任选'].includes(t ?? '')) { unmatched.push(`${r.school}/${r.major_code}/${r.table_block}: bad row`); continue; }
+    const where = `FROM major_course WHERE school_id IN (SELECT id FROM school WHERE name = @school) AND (@major = '*' OR major_code = @major)
+      AND replace(table_block, ' ', '') = replace(@block, ' ', '')`;
+    const p = { school: r.school.trim(), major: (r.major_code || '*').trim(), block: r.table_block.trim(), t };
+    const n = (db.prepare(`SELECT count(*) n ${where}`).get(p) as { n: number }).n;
+    if (!n) { unmatched.push(`${p.school}/${p.major}/${p.block}`); continue; }
+    matched += n;
+    updated += db.prepare(`UPDATE major_course SET course_type = @t WHERE rowid IN (SELECT rowid ${where} AND review_status <> 'edited' AND course_type IS NOT @t)`).run(p).changes;
+  }
+  return { updated, matched, unmatched };
 }

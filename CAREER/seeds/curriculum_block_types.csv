@@ -1,0 +1,5 @@
+school,major_code,table_block,course_type,verified_by,note
+哈尔滨工业大学（威海）,080717T,专业方向选修课表一,限选,国内教育行业专家,2026-10-13: bounded choice (4 credits from 6 listed courses) counts as 限选
+哈尔滨工业大学（威海）,080717T,专业方向选修课表二,任选,国内教育行业专家,2026-10-13: broad list stays 任选 even though the text also says 选择4学分
+哈尔滨工业大学（威海）,080901,专业方向选修课表一,限选,国内教育行业专家,2026-10-13: same structure as 080717T
+哈尔滨工业大学（威海）,080901,专业方向选修课表二,任选,国内教育行业专家,2026-10-13: same structure as 080717T

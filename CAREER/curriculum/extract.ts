@@ -121,8 +121,8 @@ export const typeFromBlock = (block: string | null, fallback: CourseType | null)
  *  重点提升计划); 通识教育核心课程 is a choice category and stays null. Only used when the model gave no course_type. */
 export const impliedType = (block: string): CourseType | null => {
   const b = block.replace(/\s+/g, '');
-  // a 课程组 table (SDU 080902 "大学英语课题组": 17 options of the required 8-credit 大学英语课程组) = limited choice
-  if (/(课程组|课题组)$|大学英语课程设置/.test(b)) return '限选';
+  // a 课程组 table (SDU 080902 "大学英语课题组" / "大学英语课程": 17 options of the required 8-credit 大学英语课程组) = limited choice
+  if (/(课程组|课题组)$|^大学英语/.test(b)) return '限选'; // server 2026-10-13: the block reads 大学英语课程
   return /通识/.test(b) ? null : /(平台|基础|核心)课程|重点提升计划/.test(b) ? '必修' : null;
 };
 

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { parseCsv } from '../lib/csv.js';
 import { applyAliasTags, classifyCoreNames } from './curriculum/tag.js';
-import { backfillImpliedTypes } from './curriculum/load.js';
+import { applyBlockTypeConfig, backfillImpliedTypes } from './curriculum/load.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ALIAS_CSV = join(HERE, 'seeds', 'skill_aliases.csv');
@@ -39,9 +39,10 @@ export function loadSkillAliases(db: Database.Database, path = ALIAS_CSV, log: (
 /** deterministic re-derivation after alias / type changes: alias tags, 核心课名 classification, implied course types */
 export function applyAliasRules(db: Database.Database) {
   const types = backfillImpliedTypes(db);
+  const blocks = applyBlockTypeConfig(db);
   const tags = applyAliasTags(db);
   const core = classifyCoreNames(db);
-  return { types, tags, core_name_retyped: core.updated };
+  return { types, blocks, tags, core_name_retyped: core.updated };
 }
 
 export interface AliasRow { alias: string; skill_id: string; skill: string; skill_type: string; source: string; created_by: string | null; created_at: string | null; courses: number }

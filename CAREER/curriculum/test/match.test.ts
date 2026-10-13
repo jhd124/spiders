@@ -141,3 +141,53 @@ test('expert aliases tag courses deterministically; admin delete is tombstoned; 
   assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note\n[\s\S]*代数与几何,线性代数,expert,added by expert/);
   db.close();
 });
+
+test('server 0a4f5d8 root cause: a flagged/weaker LLM row blocked the alias tag; now taken over (reviewed rows kept)', async () => {
+  const { applyAliasRules } = await import('../../aliases.js');
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  const course = (id: string, name: string) => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'w', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, table_block) VALUES ('w', '080717T', ?, 'u', 'llm', '必修', 0, '数理与自然科学基础课程')").run(id);
+  };
+  course('w:代数与几何C', '代数与几何C');
+  course('w:数理逻辑与近世代数', '数理逻辑与近世代数');
+  course('w:集合论与图论', '集合论与图论');
+  const llm = db.prepare(`INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, source, evidence_type, evidence_quote, needs_review, review_reason)
+    VALUES (?, ?, ?, 'llm', ?, 'llm', ?, 'x | 代数与几何C | 3', ?, ?)`);
+  llm.run('w:代数与几何C', 'foundation.linear-algebra', 0.5, 0, '课名推断', 1, '引文只列课程名');   // flagged -> taken over
+  llm.run('w:数理逻辑与近世代数', 'foundation.discrete-math', 0.5, 1, '课名推断', 0, null);      // expert-reviewed -> kept
+  const a = applyAliasRules(db).tags;
+  assert.ok(a.took_over >= 1 && a.kept >= 1 && a.inserted >= 1, JSON.stringify(a));
+  const row = (c: string, s: string) => db.prepare('SELECT source, needs_review, evidence_type, extraction_method FROM course_skill WHERE course_id = ? AND skill_id = ?').get(c, s);
+  assert.deepEqual(row('w:代数与几何C', 'foundation.linear-algebra'), { source: 'rule:alias', needs_review: 0, evidence_type: '课名推断', extraction_method: 'pdf_parse' });
+  assert.deepEqual(row('w:数理逻辑与近世代数', 'foundation.discrete-math'), { source: 'llm', needs_review: 0, evidence_type: '课名推断', extraction_method: 'llm' });
+  assert.equal((row('w:集合论与图论', 'foundation.discrete-math') as { source: string }).source, 'rule:alias');
+  assert.equal(applyAliasRules(db).tags.took_over, 0, 'idempotent');
+  db.close();
+});
+
+test('per-source block type config (expert): HIT-WH 表一 限选, 表二 任选; reviewer edits kept; 大学英语课程 -> 限选', async () => {
+  const { applyBlockTypeConfig, backfillImpliedTypes } = await import('../load.js');
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  db.prepare(`INSERT INTO school (id, name, source) VALUES ('hw', '哈尔滨工业大学（威海）', 't'), ('sd', '山东大学', 't')`).run();
+  const mc = (school: string, major: string, id: string, block: string, type: string | null, status = 'pending') => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, ?, ?, 'u', 'llm')").run(id, school, id);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, table_block, review_status) VALUES (?, ?, ?, 'u', 'llm', ?, 0, ?, ?)").run(school, major, id, type, block, status);
+  };
+  mc('hw', '080717T', 'hw:深度学习', '专业方向选修课表一', '任选');
+  mc('hw', '080901', 'hw:深度学习2', '专业方向选修课表一', '任选');
+  mc('hw', '080901', 'hw:强化学习', '专业方向选修课表一', '任选', 'edited');
+  mc('hw', '080717T', 'hw:Python', '专业方向选修课表二', '任选');
+  mc('sd', '080902', 'sd:英语', '大学英语课程', null);
+  const r = applyBlockTypeConfig(db);
+  assert.equal(r.updated, 2);
+  assert.ok(r.unmatched.length >= 1, 'config rows without data are reported');
+  const t = (id: string) => (db.prepare('SELECT course_type FROM major_course WHERE course_id = ?').get(id) as { course_type: string | null }).course_type;
+  assert.deepEqual(['hw:深度学习', 'hw:深度学习2', 'hw:强化学习', 'hw:Python'].map(t), ['限选', '限选', '任选', '任选']);
+  assert.equal(applyBlockTypeConfig(db).updated, 0, 'idempotent');
+  assert.equal(backfillImpliedTypes(db), 1);
+  assert.equal(t('sd:英语'), '限选');
+  db.close();
+});

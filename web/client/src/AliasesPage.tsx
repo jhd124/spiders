@@ -23,8 +23,8 @@ export function AliasesPage() {
   const load = () => j<{ aliases: Alias[]; skills: Skill[] }>('/api/aliases').then((r) => { setRows(r.aliases); setSkills(r.skills); }).catch((e: Error) => setErr(e.message));
   useEffect(() => { void load(); }, []);
   const shown = useMemo(() => rows.filter((r) => !filter || r.alias.includes(filter) || r.skill.includes(filter)), [rows, filter]);
-  type Res = { types: number; tags: { inserted: number; deleted: number; updated: number }; core_name_retyped: number };
-  const done = (r: Res) => setMsg(`已应用：别名标签 +${r.tags.inserted} −${r.tags.deleted}，核心课名重算 ${r.core_name_retyped} 条`);
+  type Res = { types: number; tags: { inserted: number; deleted: number; updated: number; took_over: number }; core_name_retyped: number };
+  const done = (r: Res) => setMsg(`已应用：别名标签 +${r.tags.inserted} 接管 ${r.tags.took_over} −${r.tags.deleted}，核心课名重算 ${r.core_name_retyped} 条`);
   const need = () => { if (!by.trim()) { setErr('请先填写操作人'); return false; } localStorage.setItem('reviewer', by.trim()); setErr(''); return true; };
   const add = async () => {
     if (!need()) return;

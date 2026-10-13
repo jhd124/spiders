@@ -25,7 +25,10 @@ export function syncOccupationSkills() {
     if (existsSync(CAREER_DB)) withDb((db) => db.transaction(() => {
       loadSkillAliases(db);
       const a = applyAliasRules(db);
-      console.log(`[career] deterministic rules at start: course_type filled ${a.types}; alias tags +${a.tags.inserted} -${a.tags.deleted} ~${a.tags.updated}; 核心课名 re-typed ${a.core_name_retyped}`);
+      console.log(`[career] deterministic rules at start: course_type filled from block ${a.types}; block type config ${a.blocks.updated} rows set (${a.blocks.matched} matched)`
+        + `; alias tags: ${a.tags.matched} course×alias matches, +${a.tags.inserted} new, ${a.tags.took_over} took over flagged/weaker unreviewed rows, ${a.tags.kept} kept existing, ${a.tags.rejected} expert-rejected, -${a.tags.deleted} stale`
+        + `; 核心课名 re-typed ${a.core_name_retyped}`);
+      if (a.blocks.unmatched.length) console.error(`[career] ERROR curriculum_block_types.csv rows matching nothing: ${a.blocks.unmatched.join('; ')}`);
       loadOccupationSkills(db);
     })());
   } catch (err) {
