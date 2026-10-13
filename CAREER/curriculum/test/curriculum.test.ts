@@ -265,7 +265,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.ok(s.tags >= 1);
   const db2 = new Database(process.env.CAREER_DB!);
   assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
-  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 94); // 38 + 55 batch-2 (016) + 数据库原理 (017)
+  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 98); // 38 + 55 batch-2 (016) + 数据库原理 (017) + 4 software (020)
   db2.close();
 });
 

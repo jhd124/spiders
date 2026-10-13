@@ -80,8 +80,8 @@ test('the shipped expert seed: every skill name and occupation resolves', () => 
     db.prepare(`INSERT OR IGNORE INTO occupation (code, level, level_name, name, edition, source_batch, source_url, updated_at) VALUES (?, 4, '细类', ?, '2022', '大典2022', 'u', 'x')`).run(c, c);
   const r = loadOccupationSkills(db, OCC_SKILLS_CSV, () => {});
   assert.deepEqual(r.skipped, []);
-  assert.equal(r.loaded, 85);
-  assert.equal((db.prepare(`SELECT count(*) n FROM occupation_skill WHERE extraction_method = 'expert' AND verified_by = '国内教育行业专家' AND reviewed = 1`).get() as { n: number }).n, 85);
+  assert.equal(r.loaded, 90);
+  assert.equal((db.prepare(`SELECT count(*) n FROM occupation_skill WHERE extraction_method = 'expert' AND verified_by = '国内教育行业专家' AND reviewed = 1`).get() as { n: number }).n, 90);
   db.close();
 });
 
