@@ -15,6 +15,7 @@ import { ROOT } from '../../lib/io.js';
 import { discoverGroups } from '../../lib/discovery.js';
 import { HttpError, RunManager } from './runs.js';
 import { review } from './review.js';
+import { match, syncOccupationSkills } from './match.js';
 import { describeDataset, getItem, listDatasets, queryDataset } from './query.js';
 import type { CrawlerView, GroupView, LogLine, Run, Task } from '../shared/types.js';
 
@@ -167,6 +168,7 @@ app.get('/api/datasets/:group/items/:id{.+}', async (c) =>
 );
 
 app.route('/api/review/curriculum', review);
+app.route('/api/match', match);
 
 app.all('/api/*', (c) => c.json({ error: 'not found' }, 404));
 
@@ -191,6 +193,8 @@ for (const g of discoverGroups()) {
     console.error(`[migrate] ${g.name} failed:`, err);
   }
 }
+
+syncOccupationSkills();
 
 serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
   console.log(`spiders web: http://${info.address}:${info.port}  (no auth — keep it on localhost)`);

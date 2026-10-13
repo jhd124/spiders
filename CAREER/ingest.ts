@@ -20,6 +20,7 @@ import { LEVEL_NAMES, type Occupation } from './occupations/clean.js';
 import type { FetchedDoc } from './fetchdoc.js';
 import { ingestCurriculum } from './curriculum/load.js';
 import { syncReportSources } from './report_sources.js';
+import { loadOccupationSkills } from './match.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 type DocMeta = Omit<FetchedDoc, 'path'>;
@@ -242,6 +243,7 @@ export function ingest(only: string[] = []) {
       ingestSchools(db);
       if (want('curriculum')) ingestCurriculum(db);
       syncReportSources(db);
+      loadOccupationSkills(db);
     })();
     for (const d of datasets) console.log(`[career] fts ${d.fts.table}: ${rebuildFts(db, d)} rows`);
   } finally {
