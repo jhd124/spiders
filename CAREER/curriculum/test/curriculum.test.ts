@@ -149,7 +149,7 @@ test('ingest: mock results are never stored; real results are, and reviews survi
   assert.equal(row.course_type, '必修');
   assert.equal(row.table_block, '专业核心课程');
   assert.equal(row.core_in_section, 0);
-  assert.equal(row.is_core, null, 'table block alone does not decide core');
+  assert.equal(row.is_core, 0, 'table block alone is 专业必修, not core (expert rule 009)');
   assert.ok(String(row.source_doc_id).startsWith('curriculum:'));
 
   db.prepare("UPDATE major_course SET review_status='edited', reviewed=1, credits=5, reviewer='专家'").run();
@@ -247,7 +247,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.equal(p.droppedUnknown, 1);
   assert.equal(p.tags.filter((t) => t.course_id === 'c').length, 3);
   assert.equal(p.droppedOver, 1);
-  assert.deepEqual(p.untagged, [{ course_id: 'b', is_core: true, reason: '综合训练' }]);
+  assert.deepEqual(p.untagged, [{ course_id: 'b', is_core: false, reason: '综合训练' }]);
   assert.equal(parseTagResponse('not json', courses, skills).untagged.length, 3);
 
   const { tagSkills } = await import('../tag.js');
@@ -264,7 +264,7 @@ test('skill tagger: only listed ids, max 3, untagged never forced, mock never wr
   assert.ok(s.tags >= 1);
   const db2 = new Database(process.env.CAREER_DB!);
   assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
-  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 36);
+  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 37);
   db2.close();
 });
 
@@ -286,4 +286,34 @@ test('table chunking: one unit per 课程类别 block, label fragments kept, sub
   assert.deepEqual(units.map((u) => u.kind), ['core_section', 'table_block', 'table_block']);
   assert.equal(typeFromBlock('专业限选课程', '必修'), '限选');
   assert.equal(typeFromBlock('专业核心课程', null), null);
+});
+
+test('evidence-based tagging: verbatim quote checked, hedges flagged, tool skills need the tool named', async () => {
+  const { parseTagResponse, TAG_PROMPT_VERSION } = await import('../skills.js');
+  const { isCoreValue, coreLabel } = await import('../load.js');
+  assert.equal(isCoreValue({ core_in_section: false, block: '专业核心课程' }), 0);
+  assert.equal(isCoreValue({ core_in_section: true, block: null }), 1);
+  assert.equal(coreLabel({ is_core: 0, table_block: '专业核心课程', course_type: '必修' }), '专业必修');
+  assert.match(TAG_PROMPT_VERSION, /v3/);
+  const skills = [
+    { id: 'software.os', name: '操作系统原理', domain_id: 'software', domain_name: '软件开发', skill_type: '专业知识' },
+    { id: 'software.python', name: 'Python', domain_id: 'software', domain_name: '软件开发', skill_type: '工具与技术' },
+    { id: 'hardware.fpga', name: 'FPGA', domain_id: 'hardware', domain_name: '电路与硬件', skill_type: '工具与技术' },
+    { id: 'hardware.comp-arch', name: '计算机组成与体系结构', domain_id: 'hardware', domain_name: '电路与硬件', skill_type: '专业知识' },
+  ];
+  const source = 'sd01 | 操作系统 | 4 | 72\n sd02 | 计算概论 | 2 | 48\n sd03 | 计算机组成综合实践 | 2 | 64\n基于 FPGA 完成 CPU 设计';
+  const courses = ['操作系统', '计算概论', '计算机组成综合实践'].map((name, i) => ({ course_id: String(i), name, course_type: '必修', credits: 2, snippet: null, is_core: 1 }));
+  const resp = JSON.stringify({ courses: [
+    { course: '操作系统', skills: [{ skill_id: 'software.os', quote: '操作系统  | 4', rationale: '课程名即操作系统' }] },
+    { course: '计算概论', skills: [{ skill_id: 'software.python', quote: '计算概论 | 2', rationale: '入门课常用 Python' }, { skill_id: 'software.os', quote: '计算概论讲操作系统', rationale: '通常涉及' }] },
+    { course: '计算机组成综合实践', skills: [{ skill_id: 'hardware.fpga', quote: '基于 FPGA 完成 CPU 设计', rationale: '原文写明 FPGA' }, { skill_id: 'hardware.comp-arch', rationale: '组成' }] },
+  ] });
+  const p = parseTagResponse(resp, courses, skills, source);
+  const get = (c: string, s: string) => p.tags.find((t) => t.course_id === c && t.skill_id === s);
+  assert.equal(get('0', 'software.os')?.needs_review, false, 'whitespace/separators normalized');
+  assert.equal(get('1', 'software.python'), undefined, 'tool not named in the text is dropped');
+  assert.equal(get('1', 'software.os')?.needs_review, true);
+  assert.match(get('1', 'software.os')!.review_reason!, /引用不在原文中.*通常/);
+  assert.equal(get('2', 'hardware.fpga')?.needs_review, false);
+  assert.match(get('2', 'hardware.comp-arch')!.review_reason!, /没有原文引用/);
 });

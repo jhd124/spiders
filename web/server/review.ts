@@ -1,7 +1,7 @@
 /**
  * 培养方案 course review API (CAREER major_course rows extracted by the LLM).
  *   GET  /api/review/curriculum/groups                 school x major with counts per review_status
- *   GET  /api/review/curriculum/items?school_id=&major_code=
+ *   GET  /api/review/curriculum/items?school_id=&major_code=[&needs_review=1]   (tags: skill + 标签依据 evidence_quote + needs_review)
  *   POST /api/review/curriculum/action  {school_id, major_code, course_id, action: approve|reject|edit, reviewer, edits?, note?}
  */
 import { existsSync } from 'node:fs';
@@ -34,11 +34,19 @@ review.get('/groups', (c) => c.json(withDb((db) => db.prepare(`
 review.get('/items', (c) => {
   const school = c.req.query('school_id'), major = c.req.query('major_code');
   if (!school || !major) throw new HttpError(400, 'school_id and major_code are required');
+  const onlyReview = c.req.query('needs_review') === '1';
   return c.json(withDb((db) => db.prepare(`
     SELECT mc.school_id, mc.major_code, mc.course_id, co.name, mc.course_type, mc.table_block, mc.module, mc.core_in_section, mc.is_core, mc.credits, mc.hours, mc.semester, mc.source_page,
-      mc.snippet, mc.source_url, mc.model, mc.confidence, mc.review_status, mc.reviewer, mc.reviewed_at, mc.review_note, mc.plan_year
+      mc.snippet, mc.source_url, mc.model, mc.confidence, mc.review_status, mc.reviewer, mc.reviewed_at, mc.review_note, mc.plan_year,
+      (SELECT json_group_array(json_object('skill_id', cs.skill_id, 'skill', sk.name, 'skill_type', sk.skill_type, 'evidence_quote', cs.evidence_quote,
+          'rationale', cs.rationale, 'needs_review', cs.needs_review, 'review_reason', cs.review_reason))
+        FROM course_skill cs JOIN skill sk ON sk.id = cs.skill_id WHERE cs.course_id = mc.course_id) AS tags_json,
+      (SELECT reason FROM course_skill_untagged u WHERE u.course_id = mc.course_id) AS untagged_reason
     FROM major_course mc JOIN course co ON co.id = mc.course_id
-    WHERE mc.school_id = ? AND mc.major_code = ? ORDER BY mc.review_status != 'pending', mc.source_page, co.name`).all(school, major)));
+    WHERE mc.school_id = ? AND mc.major_code = ?
+      AND (? = 0 OR EXISTS (SELECT 1 FROM course_skill cs WHERE cs.course_id = mc.course_id AND cs.needs_review = 1))
+    ORDER BY mc.review_status != 'pending', mc.source_page, co.name`).all(school, major, onlyReview ? 1 : 0)
+    .map((r) => { const { tags_json, ...rest } = r as { tags_json: string }; return { ...rest, tags: JSON.parse(tags_json ?? '[]') }; })));
 });
 
 const ACTIONS = { approve: 'approved', reject: 'rejected', edit: 'edited' } as const;

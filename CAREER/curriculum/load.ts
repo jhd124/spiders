@@ -15,8 +15,12 @@ import { RAW_NAME, type RawCurriculum } from './crawler.js';
 import type { CleanCurriculum } from './clean.js';
 import { normCourseName } from './extract.js';
 
-/** 1 = listed in the 核心课程 paragraph, NULL = only the table block says 专业核心 (expert rule pending), 0 = neither */
-export const isCoreValue = (c: { core_in_section: boolean; block: string | null }) => (c.core_in_section ? 1 : c.block && /专业核心/.test(c.block) ? null : 0);
+/** Expert rule (009): core ONLY when listed in the 正文 核心课程 section. A course that is only in the table's 专业核心课程
+ *  block is 专业必修 (is_core 0); table_block stays as the source fact. Applies to every school. */
+export const isCoreValue = (c: { core_in_section: boolean; block?: string | null }) => (c.core_in_section ? 1 : 0);
+/** Display label: 核心课 (section) / 专业必修 (only the table's 专业核心 block) / course_type */
+export const coreLabel = (c: { is_core: number | null; table_block: string | null; course_type: string | null }) =>
+  c.is_core === 1 ? '核心课' : c.table_block && /专业核心/.test(c.table_block) ? '专业必修' : c.course_type;
 
 const readJsonSync = <T>(p: string): T => JSON.parse(readFileSync(p, 'utf8')) as T;
 

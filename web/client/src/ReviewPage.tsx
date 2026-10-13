@@ -5,7 +5,11 @@ interface Item {
   school_id: string; major_code: string; course_id: string; name: string; course_type: string | null; table_block: string | null; module: string | null; core_in_section: number; is_core: number | null; credits: number | null; hours: number | null;
   semester: string | null; source_page: number | null; snippet: string | null; source_url: string; model: string | null; confidence: number | null;
   review_status: string; reviewer: string | null; reviewed_at: string | null; review_note: string | null;
+  tags: Tag[]; untagged_reason: string | null;
 }
+interface Tag { skill_id: string; skill: string; skill_type: string; evidence_quote: string | null; rationale: string | null; needs_review: number; review_reason: string | null }
+/** expert rule (009): 核心课 only from the 正文 核心课程 section; table-only 专业核心 block = 专业必修 */
+const coreLabel = (it: Item) => (it.is_core === 1 ? '核心课' : it.table_block && /专业核心/.test(it.table_block) ? '专业必修' : null);
 
 async function j<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(path, { ...init, headers: { 'Content-Type': 'application/json' } });
@@ -26,14 +30,15 @@ export function ReviewPage({ sel }: { sel?: string }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Item>>({});
   const [school, major] = (sel ?? '').split('|');
+  const [onlyReview, setOnlyReview] = useState(false);
 
   const loadGroups = () => j<Group[]>('/api/review/curriculum/groups').then(setGroups).catch((e: Error) => setErr(e.message));
   const loadItems = () =>
     school && major
-      ? j<Item[]>(`/api/review/curriculum/items?${new URLSearchParams({ school_id: school, major_code: major })}`).then(setItems).catch((e: Error) => setErr(e.message))
+      ? j<Item[]>(`/api/review/curriculum/items?${new URLSearchParams({ school_id: school, major_code: major, ...(onlyReview ? { needs_review: '1' } : {}) })}`).then(setItems).catch((e: Error) => setErr(e.message))
       : setItems([]);
   useEffect(() => { void loadGroups(); }, []);
-  useEffect(() => { void loadItems(); }, [sel]);
+  useEffect(() => { void loadItems(); }, [sel, onlyReview]);
 
   const act = async (it: Item, action: 'approve' | 'reject' | 'edit') => {
     if (!reviewer.trim()) { setErr('请先填写审核人'); return; }
@@ -59,6 +64,7 @@ export function ReviewPage({ sel }: { sel?: string }) {
       <h2>培养方案课程 · 人工抽检</h2>
       <p className="muted small">LLM 抽取结果（extraction_method=llm, reviewed=0）。逐条对照原文片段与 PDF 页码：通过 / 驳回 / 修改。Mock 结果不会入库，这里只会出现真实模型的抽取。</p>
       <label>审核人 <input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="姓名" /></label>
+      {' '}<label><input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} /> 只看标签待复核（needs_review）</label>
       {err && <div className="error">{err}</div>}
       <div className="review-layout" style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         <aside style={{ minWidth: 260 }}>
@@ -80,7 +86,7 @@ export function ReviewPage({ sel }: { sel?: string }) {
         <section style={{ flex: 1 }}>
           {items.length > 0 && (
             <table className="table">
-              <thead><tr><th>课程</th><th>类别块 / 类型</th><th>学分</th><th>学时</th><th>学期</th><th>原文（页码）</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead>
+              <thead><tr><th>课程</th><th>类别块 / 类型</th><th>学分</th><th>学时</th><th>学期</th><th>原文（页码）</th><th>技能 · 标签依据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead>
               <tbody>
                 {items.map((it) => editing === it.course_id ? (
                   <tr key={it.course_id}>
@@ -89,18 +95,27 @@ export function ReviewPage({ sel }: { sel?: string }) {
                     <td><input size={3} defaultValue={it.credits ?? ''} onChange={(e) => setDraft({ ...draft, credits: numOrNull(e.target.value) })} /></td>
                     <td><input size={3} defaultValue={it.hours ?? ''} onChange={(e) => setDraft({ ...draft, hours: numOrNull(e.target.value) })} /></td>
                     <td><input size={3} defaultValue={it.semester ?? ''} onChange={(e) => setDraft({ ...draft, semester: e.target.value || null })} /></td>
-                    <td colSpan={2}><input placeholder="备注" onChange={(e) => setDraft({ ...draft, review_note: e.target.value })} /></td>
+                    <td colSpan={3}><input placeholder="备注" onChange={(e) => setDraft({ ...draft, review_note: e.target.value })} /></td>
                     <td />
                     <td><button onClick={() => act(it, 'edit')}>保存</button> <button onClick={() => setEditing(null)}>取消</button></td>
                   </tr>
                 ) : (
                   <tr key={it.course_id}>
                     <td>{it.name}</td>
-                    <td>{it.table_block ?? '—'}{it.module ? ` · ${it.module}` : ''} / {it.course_type ?? '—'}{it.core_in_section ? <span className="small"> · 四核心</span> : null}</td>
+                    <td>{it.table_block ?? '—'}{it.module ? ` · ${it.module}` : ''} / {it.course_type ?? '—'}{coreLabel(it) ? <span className="small"> · {coreLabel(it)}</span> : null}</td>
                     <td>{it.credits ?? '—'}</td>
                     <td>{it.hours ?? '—'}</td>
                     <td>{it.semester ?? '—'}</td>
                     <td className="small">«{it.snippet}» <a href={pdfLink(it.source_url, it.source_page)} target="_blank" rel="noreferrer">p{it.source_page}</a></td>
+                    <td className="small">
+                      {it.tags.map((t) => (
+                        <div key={t.skill_id} style={t.needs_review ? { background: '#fff3cd' } : undefined}>
+                          <b>{t.skill}</b>{t.skill_type === '工具与技术' ? ' [工具]' : ''}：{t.evidence_quote ? `«${t.evidence_quote}»` : <i>无依据</i>}
+                          {t.needs_review ? <span className="error"> 待复核：{t.review_reason}</span> : null}
+                        </div>
+                      ))}
+                      {!it.tags.length && <span className="muted">{it.untagged_reason ? `未挂：${it.untagged_reason}` : '—'}</span>}
+                    </td>
                     <td>{it.confidence?.toFixed(2)} <span className="muted small">{it.model}</span></td>
                     <td>{STATUS[it.review_status] ?? it.review_status}{it.reviewer ? <span className="muted small"> · {it.reviewer}</span> : null}</td>
                     <td>
