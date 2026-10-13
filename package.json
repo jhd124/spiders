@@ -41,6 +41,7 @@
     "clean:career-curriculum": "tsx CAREER/curriculum/clean.ts",
     "career:curriculum:try": "tsx CAREER/curriculum/try.ts",
     "test:career": "tsx --test CAREER/curriculum/test/*.test.ts",
+    "career:tag-skills": "tsx CAREER/curriculum/tag.ts",
     "career:ingest": "tsx CAREER/ingest.ts",
     "career:all": "tsx scripts/run-group.ts CAREER",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",

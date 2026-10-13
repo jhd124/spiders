@@ -14,12 +14,10 @@ import { isMultiMajor, majorCodes, readManifest } from './manifest.js';
 import { RAW_NAME, type RawCurriculum } from './crawler.js';
 import type { CleanCurriculum } from './clean.js';
 import { normCourseName } from './extract.js';
-import { NoopSkillTagger, type SkillTagger } from './skills.js';
 
 const readJsonSync = <T>(p: string): T => JSON.parse(readFileSync(p, 'utf8')) as T;
 
-export function ingestCurriculum(db: Database.Database, opts: { manifest?: string; tagger?: SkillTagger } = {}) {
-  const tagger = opts.tagger ?? new NoopSkillTagger();
+export function ingestCurriculum(db: Database.Database, opts: { manifest?: string } = {}) {
   const now = new Date().toISOString();
   const majors = new Set((db.prepare('SELECT code FROM major').all() as { code: string }[]).map((r) => r.code));
   const raw = existsSync(rawPath(RAW_NAME)) ? readJsonSync<RawCurriculum>(rawPath(RAW_NAME)) : { docs: [] as RawCurriculum['docs'] };
@@ -107,6 +105,6 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       loaded++;
     }
   }
-  // stage 2 (course -> skill tagging) is a stub: the default tagger is NoopSkillTagger; see skills.ts
-  console.log(`[career] curriculum: manifest ${synced} sources, upserted ${loaded} major_course rows${skippedMock ? `, skipped ${skippedMock} MOCK courses (not ingested)` : ''}, skill tagger: ${tagger.name}`);
+  // stage 2 (course -> skill tagging) runs after ingest: CAREER/post_ingest.ts -> curriculum/tag.ts
+  console.log(`[career] curriculum: manifest ${synced} sources, upserted ${loaded} major_course rows${skippedMock ? `, skipped ${skippedMock} MOCK courses (not ingested)` : ''}, skill tagging runs next (post_ingest)`);
 }

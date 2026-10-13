@@ -3,6 +3,7 @@
  *   tsx scripts/run-group.ts MOOC                    # whole group
  *   tsx scripts/run-group.ts MOOC yale brown         # some crawlers
  *   tsx scripts/run-group.ts MOOC --no-details       # flags are passed to every crawler
+ * Then <GROUP>/post_ingest.ts if present (CAREER: course -> skill tagging).
  * Crawlers run sequentially so per-host rate limits stay polite.
  */
 import { spawnSync } from 'node:child_process';
@@ -35,6 +36,8 @@ for (const c of crawlers) {
 }
 if (g.ingestFile && ok.length && existsSync(join(ROOT, g.ingestFile))) {
   if (!run(g.ingestFile, ok)) failed.push('ingest');
+  // optional <GROUP>/post_ingest.ts (e.g. CAREER course -> skill tagging) runs after a successful ingest
+  else if (existsSync(join(ROOT, group, 'post_ingest.ts')) && !run(join(group, 'post_ingest.ts'))) failed.push('post_ingest');
 }
 console.log(`\n[run-group] ${group}: ok=${ok.join(',') || '-'} failed=${failed.join(',') || '-'}`);
 if (failed.length) process.exit(1);

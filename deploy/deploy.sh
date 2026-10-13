@@ -47,6 +47,11 @@ rm -rf "$BASE/app-prev"
 [ -d "$BASE/app" ] && mv "$BASE/app" "$BASE/app-prev"
 mv "$NEW" "$BASE/app"
 docker tag "spiders:$SHA" spiders:latest
+# cron schedule lives in the repo (deploy/cron/spiders-career); install idempotently (only when changed)
+CRON_SRC="$BASE/app/deploy/cron/spiders-career"
+if [ -f "$CRON_SRC" ] && ! cmp -s "$CRON_SRC" /etc/cron.d/spiders-career; then
+  install -m 0644 -o root -g root "$CRON_SRC" /etc/cron.d/spiders-career && log "installed /etc/cron.d/spiders-career"
+fi
 docker images spiders --format '{{.Tag}} {{.CreatedAt}}' | grep -vE '^(latest|<none>) ' | sort -k2 -r | awk 'NR>3{print $1}' \
   | while read -r t; do [ "spiders:$t" = "spiders:$SHA" ] || docker rmi "spiders:$t" >/dev/null 2>&1 || true; done
 docker image prune -f >/dev/null 2>&1 || true

@@ -209,6 +209,18 @@ npm run test:career                                                             
 
 第二阶段（课程 → 技能）：`curriculum/skills.ts` 的 `SkillTagger` 接口，目前为 `NoopSkillTagger`（二级技能未定义）。
 
+## 课程 → 二级技能打标签（007，curriculum/skills.ts + tag.ts）
+
+- 迁移 007 写入专家给的第一批二级技能：6 个计算机相关一级域共 36 个（id 形如 `software.dsa`）。名称按专家原文，reviewed=1；`skill_type`（专业知识/工具与技术）是开发先填的，等专家确认。
+- `npm run career:tag-skills`：每个「学校×专业」调用一次大模型，给每门课挂 1–3 个技能，只能从清单里选（清单外的 id 直接丢掉）。核心课要求至少挂 1 个，但对不上的课不硬挂，写进 `course_skill_untagged` 并附原因，交给专家决定是否补技能。
+- 写入 `course_skill`（extraction_method='llm'，source='llm:<model>'，附一句 rationale，reviewed=0）；已审核的行不会被覆盖。结果按 sha256(模型+prompt 版本+输入) 缓存在 llm_cache，重跑不重复花 token；mock 模式什么都不写。
+- `career:all` 跑完 ingest 后会自动执行 `CAREER/post_ingest.ts`，也就是打标签这一步（见 scripts/run-group.ts）。
+
+## 定时任务（deploy/cron/spiders-career）
+
+- 每月 1 日 03:17（Asia/Shanghai，`CRON_TZ`）在服务器上跑 `docker exec spiders npm run career:all`，用 `flock -n /tmp/spiders-career.lock` 防止和手动运行重叠，日志写到 `/var/log/spiders-career.log`。
+- 每次部署时 `deploy/deploy.sh` 都会把这个文件装到 `/etc/cron.d/spiders-career`，内容没变就跳过。改时间只需改仓库里的这个文件。
+
 ## 专家决策（取代原来的开放问题）
 
 1. **省份**：先做山东（专业(类)+院校模式，最多 96 个志愿，每个志愿对应一个专业(类)；山东省教育招生考试院每年公布一分一段表和投档线），再做浙江。`admission_rank` 粒度是"院校 × 专业(类) × 年 × 省"，字段包括最低分和最低位次；按专业类招生时填 `major_class_code`。

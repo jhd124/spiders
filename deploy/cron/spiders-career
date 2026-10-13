@@ -1,0 +1,7 @@
+# /etc/cron.d/spiders-career — installed by deploy/deploy.sh on every deploy (do not edit on the server).
+# Monthly CAREER pipeline (crawl -> LLM extraction (cached) -> ingest -> skill tagging):
+# 03:17 Asia/Shanghai on the 1st of each month. flock prevents overlap with a manual run.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=Asia/Shanghai
+17 3 1 * * root flock -n /tmp/spiders-career.lock docker exec spiders npm run career:all >> /var/log/spiders-career.log 2>&1

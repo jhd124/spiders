@@ -216,3 +216,47 @@ test('ingest: sources removed from the manifest are deleted with their pending r
   assert.equal((db.prepare("SELECT COUNT(*) n FROM major_course WHERE review_status='pending' AND curriculum_source_id IS NOT NULL").get() as { n: number }).n, 0);
   assert.equal((db.prepare('SELECT COUNT(*) n FROM curriculum_source_major').get() as { n: number }).n, 0);
 });
+
+test('skill tagger: only listed ids, max 3, untagged never forced, mock never writes', async () => {
+  const { parseTagResponse, LlmSkillTagger, mockTagProvider } = await import('../skills.js');
+  const skills = [
+    { id: 'software.dsa', name: '数据结构与算法', domain_id: 'software', domain_name: '软件开发' },
+    { id: 'software.os', name: '操作系统原理', domain_id: 'software', domain_name: '软件开发' },
+    { id: 'ai.ml', name: '机器学习', domain_id: 'ai', domain_name: '人工智能' },
+    { id: 'ai.dl', name: '深度学习', domain_id: 'ai', domain_name: '人工智能' },
+  ];
+  const courses = [
+    { course_id: 'a', name: '数据结构与算法', course_type: '核心', credits: 4, snippet: null },
+    { course_id: 'b', name: '毕业论文（设计）', course_type: '核心', credits: 7, snippet: null },
+    { course_id: 'c', name: '人工智能引论', course_type: '主干', credits: 3, snippet: null },
+  ];
+  const resp = JSON.stringify({ courses: [
+    { course: '数据结构与算法', skills: [{ skill_id: 'software.dsa', rationale: 'x' }, { skill_id: 'made.up', rationale: 'y' }] },
+    { course: '毕业论文（设计）', skills: [], reason: '综合训练' },
+    { course: '人工智能引论', skills: ['ai.ml', 'ai.dl', 'software.dsa', 'software.os'].map((skill_id) => ({ skill_id, rationale: 'r' })) },
+  ] });
+  const p = parseTagResponse(resp, courses, skills);
+  assert.deepEqual(p.tags.filter((t) => t.course_id === 'a').map((t) => t.skill_id), ['software.dsa']);
+  assert.equal(p.droppedUnknown, 1);
+  assert.equal(p.tags.filter((t) => t.course_id === 'c').length, 3);
+  assert.equal(p.droppedOver, 1);
+  assert.deepEqual(p.untagged, [{ course_id: 'b', is_core: true, reason: '综合训练' }]);
+  assert.equal(parseTagResponse('not json', courses, skills).untagged.length, 3);
+
+  const { tagSkills } = await import('../tag.js');
+  const Database = (await import('better-sqlite3')).default;
+  const { migrate } = await import('../../migrate.js');
+  migrate(process.env.CAREER_DB!, () => {});
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  db.prepare("INSERT OR IGNORE INTO course (id, school_id, name, source_url, extraction_method) VALUES ('s:数据结构与算法', 's', '数据结构与算法', 'u', 'llm')").run();
+  db.prepare("INSERT OR IGNORE INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type) VALUES ('s', '080901', 's:数据结构与算法', 'u', 'llm', '核心')").run();
+  db.close();
+  const s = await tagSkills(process.env.CAREER_DB!, new LlmSkillTagger(mockTagProvider(skills), new MemoryCache()));
+  assert.equal(s.mock, true);
+  assert.ok(s.tags >= 1);
+  const db2 = new Database(process.env.CAREER_DB!);
+  assert.equal((db2.prepare('SELECT count(*) n FROM course_skill').get() as { n: number }).n, 0);
+  assert.equal((db2.prepare('SELECT count(*) n FROM skill').get() as { n: number }).n, 36);
+  db2.close();
+});
