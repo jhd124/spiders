@@ -12,7 +12,7 @@ import { migrate } from '../CAREER/migrate.js';
 import { CLEAN_DIR } from '../lib/io.js';
 import { MockProvider, llmConfigured, providerFromEnv } from '../lib/llm.js';
 import { isMain } from '../lib/main.js';
-import { classifyTitle } from './occupations.js';
+import { classifyPosting } from './occupations.js';
 import { tagPostings } from './skills.js';
 import { computeSalaryStats } from './stats.js';
 import type { CleanPosting } from './types.js';
@@ -30,13 +30,41 @@ export function upsertPostings(db: Database.Database, postings: CleanPosting[]) 
   let n = 0;
   db.transaction(() => {
     for (const p of postings) {
-      const occ = classifyTitle(p.title_raw); // current rules win over what clean.ts stored
-      const code = occ && (occKnown.size === 0 || occKnown.has(occ.code)) ? occ.code : null;
-      up.run({ ...p, occupation_code: code, occupation_confidence: code ? occ!.confidence : null });
+      const c = classifyPosting(p.title_raw); // current rules win over what clean.ts stored; reclassifyAll sets the flags
+      const code = c.code && (occKnown.size === 0 || occKnown.has(c.code)) ? c.code : null;
+      up.run({ ...p, occupation_code: code, occupation_confidence: code ? c.confidence : null });
       n++;
     }
   })();
+  reclassifyAll(db);
   return n;
+}
+
+/**
+ * Re-apply the current JOBS/occupations.ts rules to EVERY stored posting (not only the ones in this run's clean file),
+ * so a rule change takes effect on the server with a plain `npm run jobs:ingest` (or `npm run jobs:reclassify`).
+ */
+export function reclassifyAll(db: Database.Database) {
+  const occKnown = new Set((db.prepare('SELECT code FROM occupation').all() as { code: string }[]).map((r) => r.code));
+  const rows = db.prepare('SELECT id, title_raw, occupation_code, multi_role FROM job_posting').all() as { id: string; title_raw: string; occupation_code: string | null; multi_role: number }[];
+  const upd = db.prepare(`UPDATE job_posting SET occupation_code = ?, occupation_confidence = ?, multi_role = ?, classify_reason = ?,
+      skills_extracted_at = CASE WHEN ? THEN NULL ELSE skills_extracted_at END WHERE id = ?`);
+  let changed = 0;
+  const reasons: Record<string, number> = {};
+  db.transaction(() => {
+    for (const r of rows) {
+      const c = classifyPosting(r.title_raw);
+      const code = c.code && (occKnown.size === 0 || occKnown.has(c.code)) ? c.code : null;
+      const mr = c.multiRole ? 1 : 0;
+      reasons[c.reason] = (reasons[c.reason] ?? 0) + 1;
+      const moved = code !== r.occupation_code || mr !== r.multi_role;
+      if (moved) changed++;
+      // newly in scope for skill tagging (classified or multi-role) -> make sure it gets tagged
+      const rescan = moved && (code != null || mr === 1) && r.occupation_code == null && r.multi_role === 0;
+      upd.run(code, code ? c.confidence : null, mr, c.reason, rescan ? 1 : 0, r.id);
+    }
+  })();
+  return { total: rows.length, changed, reasons };
 }
 
 export async function ingest(sources: string[], opts: { retag?: boolean; llm?: boolean; log?: (s: string) => void } = {}) {
@@ -51,6 +79,8 @@ export async function ingest(sources: string[], opts: { retag?: boolean; llm?: b
       const postings = JSON.parse(readFileSync(f, 'utf8')) as CleanPosting[];
       log(`[jobs] ${s}: upserted ${upsertPostings(db, postings)} postings`);
     }
+    const rc = reclassifyAll(db);
+    log(`[jobs] reclassified ${rc.total} stored postings with current rules: ${rc.changed} changed; ${Object.entries(rc.reasons).map(([k, v]) => `${k} ${v}`).join(', ')}`);
     const llm = opts.llm && llmConfigured() ? providerFromEnv(new MockProvider(() => '{"skills":[]}')) : null;
     if (opts.llm && !llm) log('[jobs] --llm given but LLM_* env not configured; LLM fallback skipped');
     await tagPostings(db, { all: opts.retag, llm, log });
@@ -65,5 +95,6 @@ export async function ingest(sources: string[], opts: { retag?: boolean; llm?: b
 if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   const sources = args.filter((a) => !a.startsWith('-'));
-  await ingest(sources.length ? sources : ['upc'], { retag: args.includes('--retag'), llm: args.includes('--llm') });
+  // --no-sources: skip the clean files; just re-classify stored postings, tag, and rebuild salary_stat
+  await ingest(args.includes('--no-sources') ? [] : sources.length ? sources : ['upc'], { retag: args.includes('--retag'), llm: args.includes('--llm') });
 }

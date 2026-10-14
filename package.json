@@ -50,6 +50,7 @@
     "jobs:crawl": "npm run crawl:jobs-upc && npm run clean:jobs-upc",
     "jobs:ingest": "tsx JOBS/ingest.ts",
     "jobs:stats": "tsx JOBS/stats.ts",
+    "jobs:reclassify": "tsx JOBS/ingest.ts --no-sources",
     "jobs:all": "tsx scripts/run-group.ts JOBS",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",
     "web:server": "tsx web/server/index.ts",

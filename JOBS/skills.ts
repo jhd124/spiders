@@ -88,7 +88,7 @@ export async function tagPostings(db: Database.Database, opts: { all?: boolean; 
   const log = opts.log ?? console.log;
   const terms = loadTerms(db);
   const rows = db
-    .prepare(`SELECT id, title_raw, jd_text FROM job_posting WHERE occupation_code IS NOT NULL ${opts.all ? '' : 'AND skills_extracted_at IS NULL'}`)
+    .prepare(`SELECT id, title_raw, jd_text FROM job_posting WHERE (occupation_code IS NOT NULL OR multi_role = 1) ${opts.all ? '' : 'AND skills_extracted_at IS NULL'}`)
     .all() as { id: string; title_raw: string; jd_text: string | null }[];
   const now = new Date().toISOString();
   const delAlias = db.prepare("DELETE FROM job_posting_skill WHERE posting_id = ? AND method = 'alias'");
