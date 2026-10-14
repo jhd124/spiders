@@ -11,6 +11,7 @@ import { CAREER_DB } from '../../CAREER/db.js';
 import { listOccupations, loadOccupationSkills, matchOccupation } from '../../CAREER/match.js';
 import { addAlias, applyAliasRules, deleteAlias, exportAliasesCsv, listAliases, loadSkillAliases } from '../../CAREER/aliases.js';
 import { HttpError } from './runs.js';
+import { loadOccupationDisplay } from '../../CAREER/display.js';
 import { skillComparison } from '../../JOBS/compare.js';
 
 const withDb = <T>(f: (db: Database.Database) => T): T => {
@@ -31,6 +32,7 @@ export function syncOccupationSkills() {
         + `; 核心课名 re-typed ${a.core_name_retyped}`);
       if (a.blocks.unmatched.length) console.error(`[career] ERROR curriculum_block_types.csv rows matching nothing: ${a.blocks.unmatched.join('; ')}`);
       loadOccupationSkills(db);
+      loadOccupationDisplay(db);
     })());
   } catch (err) {
     console.error('[career] occupation skills load failed:', err);

@@ -56,7 +56,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/client",
     "web:server": "tsx web/server/index.ts",
     "web:dev": "concurrently -k -n api,ui -c blue,magenta \"tsx watch --clear-screen=false web/server/index.ts\" \"vite --config web/vite.config.ts\"",
-    "web:build": "vite build --config web/vite.config.ts",
+    "web:dev:student": "vite --config web/vite.student.config.ts",
+    "web:build": "vite build --config web/vite.config.ts && vite build --config web/vite.student.config.ts",
     "web:start": "tsx web/server/index.ts"
   },
   "devDependencies": {

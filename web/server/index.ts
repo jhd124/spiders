@@ -16,6 +16,7 @@ import { discoverGroups } from '../../lib/discovery.js';
 import { HttpError, RunManager } from './runs.js';
 import { review } from './review.js';
 import { aliases, jobs, match, syncOccupationSkills } from './match.js';
+import { publicApi } from './public.js';
 import { describeDataset, getItem, listDatasets, queryDataset } from './query.js';
 import type { CrawlerView, GroupView, LogLine, Run, Task } from '../shared/types.js';
 
@@ -167,6 +168,7 @@ app.get('/api/datasets/:group/items/:id{.+}', async (c) =>
   c.json(await getItem(c.req.param('group'), decodeURIComponent(c.req.param('id')))),
 );
 
+app.route('/api/public', publicApi);
 app.route('/api/review/curriculum', review);
 app.route('/api/match', match);
 app.route('/api/aliases', aliases);
@@ -178,6 +180,10 @@ app.all('/api/*', (c) => c.json({ error: 'not found' }, 404));
 
 const DIST = join(ROOT, 'web', 'dist');
 if (existsSync(DIST)) {
+  // student app (built with base /s/, assets under /s/assets): nginx only needs to expose /s/ and /api/public/
+  app.get('/s', (c) => c.redirect('/s/'));
+  app.use('/s/*', serveStatic({ root: DIST }));
+  app.get('/s/*', serveStatic({ path: join(DIST, 's', 'index.html') }));
   app.use('/*', serveStatic({ root: DIST }));
   app.get('*', serveStatic({ path: join(DIST, 'index.html') }));
 } else {

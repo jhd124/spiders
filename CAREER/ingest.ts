@@ -5,6 +5,7 @@
  * Upserts are keyed by the official codes, so re-running is idempotent. Seeds (pilot majors,
  * pilot schools) are loaded from CAREER/seeds/*.csv on every run.
  */
+import { loadOccupationDisplay } from './display.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -247,6 +248,7 @@ export function ingest(only: string[] = []) {
       loadSkillAliases(db);
       applyAliasRules(db);
       loadOccupationSkills(db);
+      loadOccupationDisplay(db);
     })();
     for (const d of datasets) console.log(`[career] fts ${d.fts.table}: ${rebuildFts(db, d)} rows`);
   } finally {

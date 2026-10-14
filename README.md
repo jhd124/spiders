@@ -104,3 +104,10 @@ npm run web:start    # 生产：单进程 http://127.0.0.1:8787（API + 静态�
 1. 在 `MOOC/schema.ts` 的 `SCHOOLS` 里加 key；
 2. 新建 `MOOC/<school>/crawler.ts`（用 `runSources` 写 raw）和 `clean.ts`（输出 `Course[]`，用 `writeClean` 校验去重）；
 3. `package.json` 加 `crawl:<school>` / `clean:<school>`（Web 控制台会自动发现，无需改动）。
+
+## Student app (/s/)
+
+Public, read-only pages for students: `npm run web:build` builds the admin app to `web/dist/` and the student app to `web/dist/s/` (Vite `base: '/s/'`, assets under `/s/assets/`).
+The student app calls only `GET /api/public/*` (all other methods 405). nginx without a password needs only these prefixes, proxied to the node server:
+`location /s/` and `location /api/public/` (plus an optional exact `location = /s` that redirects to `/s/`). Everything else (`/`, `/assets/`, `/api/*`) stays behind auth.
+Dev: `npm run web:dev` (API) + `npm run web:dev:student` (http://127.0.0.1:5174/s/).
