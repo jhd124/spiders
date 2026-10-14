@@ -132,6 +132,8 @@ export function ingestCurriculum(db: Database.Database, opts: { manifest?: strin
       .run(r.source_id, r.major_code, JSON.stringify(ids)).changes;
     if (stale) console.log(`[career] curriculum: ${r.school} ${r.major_code}: removed ${stale} stale pending rows`);
   }
+  const orphans = removeOrphanCourses(db);
+  if (orphans) console.log(`[career] curriculum: removed ${orphans} orphan course rows (no 培养方案 row left, e.g. renamed by a parser fix) and their unreviewed tags`);
   const typed = backfillImpliedTypes(db);
   if (typed) console.log(`[career] curriculum: ${typed} null course_type filled from the table block (impliedType)`);
   const bt = applyBlockTypeConfig(db);
@@ -160,7 +162,9 @@ export const BLOCK_TYPES_CSV = join(dirname(fileURLToPath(import.meta.url)), '..
  * Expert per-source course_type of a whole table block (seeds/curriculum_block_types.csv: school, major_code, table_block,
  * course_type, verified_by, note). Used where the block name alone is ambiguous: e.g. HIT-WH 专业方向选修课表一 (choose 4 credits from
  * 6 courses) = 限选, 表二 = 任选 although its text also says 选择4学分 — so there is deliberately NO generic "选N学分" detector.
- * major_code '*' = every major of that school. Rows edited by a reviewer (review_status 'edited') are never changed. Unconfigured
+ * major_code '*' = every major of that school. Optional column course_name (2026-10-14): the row then applies to that one course
+ * only (name compared without spaces, （）==()); table_block '*' = whichever block the course is in. Per-course rows run after
+ * block rows, so they override them (e.g. HIT-WH 080701: 4 courses the plan marks 要求必选 inside the 任选 list -> 限选). Rows edited by a reviewer (review_status 'edited') are never changed. Unconfigured
  * blocks keep the parser's type. A config row matching no stored row is reported (typo / renamed block). Idempotent.
  */
 export function applyBlockTypeConfig(db: Database.Database, path = BLOCK_TYPES_CSV): { updated: number; matched: number; unmatched: string[] } {
@@ -168,16 +172,42 @@ export function applyBlockTypeConfig(db: Database.Database, path = BLOCK_TYPES_C
   const rows = parseCsv(readFileSync(path, 'utf8'));
   const unmatched: string[] = [];
   let updated = 0, matched = 0;
-  for (const r of rows) {
+  const ordered = [...rows.filter((r) => !r.course_name?.trim()), ...rows.filter((r) => r.course_name?.trim())];
+  const norm = (col: string) => `replace(replace(replace(${col}, ' ', ''), '（', '('), '）', ')')`;
+  for (const r of ordered) {
     const t = r.course_type?.trim();
     if (!r.school?.trim() || !r.table_block?.trim() || !['必修', '限选', '任选'].includes(t ?? '')) { unmatched.push(`${r.school}/${r.major_code}/${r.table_block}: bad row`); continue; }
     const where = `FROM major_course WHERE school_id IN (SELECT id FROM school WHERE name = @school) AND (@major = '*' OR major_code = @major)
-      AND replace(table_block, ' ', '') = replace(@block, ' ', '')`;
-    const p = { school: r.school.trim(), major: (r.major_code || '*').trim(), block: r.table_block.trim(), t };
+      AND (@block = '*' OR replace(table_block, ' ', '') = replace(@block, ' ', ''))
+      AND (@course = '' OR course_id IN (SELECT id FROM course WHERE ${norm('name')} = ${norm('@course')}))
+      AND course_id NOT IN (SELECT id FROM course WHERE ${norm('name')} IN (SELECT value FROM json_each(@own)))`;
+    const course = r.course_name?.trim() ?? '';
+    const p0 = { school: r.school.trim(), major: (r.major_code || '*').trim(), block: r.table_block.trim(), course, t };
+    // a block row skips the courses that have their own per-course row (else the two would flip the type on every run)
+    const own = course ? [] : ordered.filter((o) => o.course_name?.trim() && o.school?.trim() === p0.school && [p0.major, '*'].includes((o.major_code || '*').trim()))
+      .map((o) => o.course_name!.replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')'));
+    const p = { ...p0, own: JSON.stringify(own) };
     const n = (db.prepare(`SELECT count(*) n ${where}`).get(p) as { n: number }).n;
-    if (!n) { unmatched.push(`${p.school}/${p.major}/${p.block}`); continue; }
+    if (!n) { unmatched.push(`${p.school}/${p.major}/${p.block}${course ? `/${course}` : ''}`); continue; }
     matched += n;
     updated += db.prepare(`UPDATE major_course SET course_type = @t WHERE rowid IN (SELECT rowid ${where} AND review_status <> 'edited' AND course_type IS NOT @t)`).run(p).changes;
   }
   return { updated, matched, unmatched };
+}
+
+/** Course rows no major_course row references any more (a parser fix renamed them, e.g. the glued "程序设计（C）Programming（C）军事理论与
+ *  国家安全" of 2026-10-14) are deleted with their unreviewed course_skill / untagged rows. A course with a reviewed tag or an expert
+ *  rejection is kept, so expert decisions are never lost silently. Idempotent. */
+export function removeOrphanCourses(db: Database.Database): number {
+  const orphan = `SELECT id FROM course WHERE id NOT IN (SELECT course_id FROM major_course)
+    AND id NOT IN (SELECT course_id FROM course_skill WHERE reviewed = 1) AND id NOT IN (SELECT course_id FROM course_skill_rejected)`;
+  const ids = (db.prepare(orphan).all() as { id: string }[]).map((r) => r.id);
+  if (!ids.length) return 0;
+  const j = JSON.stringify(ids);
+  return db.transaction(() => {
+    db.prepare('DELETE FROM course_skill WHERE reviewed = 0 AND course_id IN (SELECT value FROM json_each(?))').run(j);
+    db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT value FROM json_each(?))').run(j);
+    db.prepare('DELETE FROM course_skill_tag_cache WHERE course_id IN (SELECT value FROM json_each(?))').run(j);
+    return db.prepare('DELETE FROM course WHERE id IN (SELECT value FROM json_each(?))').run(j).changes;
+  })();
 }

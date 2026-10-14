@@ -76,12 +76,12 @@ test('occupation skills load by NAME, unmatched names are reported, ranking = co
 
 test('the shipped expert seed: every skill name and occupation resolves', () => {
   const db = new Database(process.env.CAREER_DB!);
-  for (const c of ['2-02-10-03', '2-02-38-03', '2-02-30-09', '2-02-10-06', '2-02-10-07', '2-02-10-04', '2-02-38-04'])
+  for (const c of ['2-02-10-03', '2-02-38-03', '2-02-30-09', '2-02-10-06', '2-02-10-07', '2-02-10-04', '2-02-38-04', '2-02-07-07', '2-02-11-01', '2-02-09-04'])
     db.prepare(`INSERT OR IGNORE INTO occupation (code, level, level_name, name, edition, source_batch, source_url, updated_at) VALUES (?, 4, '细类', ?, '2022', '大典2022', 'u', 'x')`).run(c, c);
   const r = loadOccupationSkills(db, OCC_SKILLS_CSV, () => {});
   assert.deepEqual(r.skipped, []);
-  assert.equal(r.loaded, 91);
-  assert.equal((db.prepare(`SELECT count(*) n FROM occupation_skill WHERE extraction_method = 'expert' AND verified_by = '国内教育行业专家' AND reviewed = 1`).get() as { n: number }).n, 91);
+  assert.equal(r.loaded, 126); // 91 + 35 EE/automation (2026-10-14 第二批)
+  assert.equal((db.prepare(`SELECT count(*) n FROM occupation_skill WHERE extraction_method = 'expert' AND verified_by = '国内教育行业专家' AND reviewed = 1`).get() as { n: number }).n, 126);
   db.close();
 });
 
@@ -203,5 +203,37 @@ test('per-source block type config (expert): HIT-WH 表一 限选, 表二 任选
   assert.equal(applyBlockTypeConfig(db).updated, 0, 'idempotent');
   assert.equal(backfillImpliedTypes(db), 1);
   assert.equal(t('sd:英语'), '限选');
+  db.close();
+});
+
+test('per-course block type config (HIT-WH 080701 要求必选 inside the 任选 list -> 限选) and orphan course cleanup', async () => {
+  const { applyBlockTypeConfig, removeOrphanCourses } = await import('../load.js');
+  const { writeFileSync, mkdtempSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  db.prepare(`INSERT OR IGNORE INTO school (id, name, source) VALUES ('hw', '哈尔滨工业大学（威海）', 't')`).run();
+  const mc = (id: string, name: string, block: string) => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'hw', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core, table_block) VALUES ('hw', '080701', ?, 'u', 'llm', '任选', 0, ?)").run(id, block);
+  };
+  const B = '专业方向选修课程（含研究生课程）';
+  mc('hw:e1', '电子信息类实践课（2）', B);
+  mc('hw:e2', 'DSP原理与应用', B);
+  const csv = join(mkdtempSync(join(tmpdir(), 'bt-')), 'bt.csv');
+  writeFileSync(csv, `school,major_code,table_block,course_type,verified_by,note,course_name\n哈尔滨工业大学（威海）,080701,${B},任选,x,,\n哈尔滨工业大学（威海）,080701,*,限选,x,,电子信息类实践课(2)\n`);
+  const r = applyBlockTypeConfig(db, csv);
+  assert.deepEqual(r.unmatched, []);
+  const t = (id: string) => (db.prepare('SELECT course_type FROM major_course WHERE course_id = ?').get(id) as { course_type: string }).course_type;
+  assert.deepEqual([t('hw:e1'), t('hw:e2')], ['限选', '任选'], 'course row overrides its block row; （）==()');
+  assert.equal(applyBlockTypeConfig(db, csv).updated, 0, 'idempotent');
+  // a glued name renamed by a parser fix: course row left without major_course -> removed with its unreviewed tag; reviewed kept
+  db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES ('hw:glued', 'hw', 'x', 'u', 'llm'), ('hw:kept', 'hw', 'y', 'u', 'llm')").run();
+  db.prepare("INSERT INTO course_skill (course_id, skill_id, extraction_method, reviewed) VALUES ('hw:glued', 'embedded.plc', 'llm', 0), ('hw:kept', 'embedded.plc', 'expert', 1)").run();
+  assert.equal(removeOrphanCourses(db), 1);
+  assert.equal((db.prepare("SELECT count(*) n FROM course WHERE id IN ('hw:glued', 'hw:kept', 'hw:e1')").get() as { n: number }).n, 2);
+  assert.equal((db.prepare("SELECT count(*) n FROM course_skill WHERE course_id = 'hw:glued'").get() as { n: number }).n, 0);
+  assert.equal(removeOrphanCourses(db), 0);
   db.close();
 });

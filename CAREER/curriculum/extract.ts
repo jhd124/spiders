@@ -217,6 +217,7 @@ export async function extractCourses(
   // (fallback chunks also contain lists such as 专业基础课程/主干学科, which are not core).
   if (table) {
     res.errors.push(`table parsed without LLM (${table.layout}): ${table.courses.length} rows`);
+    console.log(`[curriculum] ${ctx.school} ${ctx.majorCode}: table parsed without LLM (${table.layout}, ${table.courses.length} courses)`);
     for (const w of table.warnings) { res.errors.push(`table warning: ${w}`); console.warn(`[career] curriculum ${ctx.school} ${ctx.majorCode}: ${w}`); }
     for (const c of table.courses) {
       const k = normCourseName(c.name);

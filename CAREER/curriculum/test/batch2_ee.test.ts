@@ -169,3 +169,28 @@ test('SDU PDF layout: blocks from vertical labels, split names, 方向 modules, 
   assert.equal(by.get('供配电工程')!.module, null);
   assert.ok(!t.courses.some((c) => /应修|合计/.test(c.name)));
 });
+
+test('glued course names (server run 2026-10-14): English tail with bracket / lower case, 模块 fragments, SDU HTML label cells', async () => {
+  const { splitEnglish } = await import('../codetable.js');
+  assert.deepEqual(splitEnglish('程序设计（C）Programming（C）'), { han: '程序设计（C）', en: 'Programming（C）' });
+  assert.deepEqual(splitEnglish('深度学习 deep Learning'), { han: '深度学习', en: 'deep Learning' });
+  assert.deepEqual(splitEnglish('面向对象程序设计（Java）'), { han: '面向对象程序设计（Java）', en: '' });
+  assert.deepEqual(splitEnglish('嵌入式Linux应用开发'), { han: '嵌入式Linux应用开发', en: '' });
+  // UPC 080601 / 080801 excerpts (real text layer)
+  const fill = Array.from({ length: 14 }, (_, i) => `体育（4-${i}）\nUPE11011410${i % 10} | 1 | 32 | 0 | 0 | 0 | 32 | 0 | 1\nPhysical Education`).join('\n');
+  const upc = `六、课程设置\n${fill}\nCST110211026 | 程序设计（C）Programming（C） | 2 | 36 | 24 | 12 | 24 | 1\n军事理论与国家安全\nMRX610111021 | 3 | 52 | 40 | 12 | 40 | 1\nMilitary Theory and National Security
+工程电磁场 | 学科\nCNE322721031 | 2.5 | 42 | 36 | 6 | 36 | 4\nEngineering Electromagnetic Fields | 基础\n电气控制及可编程控制技术\n电力\nCNE321921026 | Electrical Control and Programmable | 2 | 36 | 24 | 12 | 24 | 5\n拖动\nControl Technology
+微特电机 | 电力\nCNE323421020 | 2 | 36 | 24 | 12 | 24 | 6\nMicro&Special Motors | 拖动
+CTL111721020 | 深度学习 deep Learning | 2 | 34 | 28 | 6 | 28 | 6\n数字图像处理\nCTL111321020 | 2 | 34 | 28 | 6 | 28 | 6\nDigital Image Processing\n七、毕业要求`;
+  const u = parseCodeTable([{ page: 6, text: upc }])!;
+  assert.deepEqual(u.courses.map((c) => c.name).filter((x) => !x.startsWith('体育')),
+    ['程序设计（C）', '军事理论与国家安全', '工程电磁场', '电气控制及可编程控制技术', '微特电机', '深度学习', '数字图像处理']);
+  // SDU 080902 HTML rows: a leading empty cell, a spaced vertical label and the name printed twice
+  const rows = Array.from({ length: 15 }, (_, i) => `sd0721010${i % 10} | 课程${i} | 2 | 32 | 32 | | | | 考查 | 1 |`).join('\n');
+  const html = `九、课程设置及学时分配表\n通识教育选修课程 | 00090 | 通识教育选修课程组 | 2 | 32 | 32 | | | | 考查 | 1-8 | 任选2学分\n| 通选类国际化课程 | 2 | 32 | 32 | | | | | |\n应修小计 | 4 | 64 | 64 | | | | | |\n${rows}\n应修小计 | 12 | 384 | 104 | | 280 | | | |\n创新 创业 计划 | 稷下创新 | 稷下创新 | 2 | 32 | 32 | | | | | |\n齐鲁创业 | 齐鲁创业 | 2 | 32 | 32 | | | | | |\n应修小计 | 4 | 64 | 64 | | | | | |`;
+  const s = parseCodeTable([{ page: 1, text: html }])!;
+  assert.equal(s.layout, 'sdu');
+  const names = s.courses.map((c) => c.name);
+  for (const nm of ['通选类国际化课程', '稷下创新', '齐鲁创业']) assert.ok(names.includes(nm), `${nm} in ${names.join(',')}`);
+  assert.ok(!names.some((x) => /\||\s|(.{3,})\1/.test(x)), names.join(','));
+});

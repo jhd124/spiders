@@ -91,14 +91,17 @@ function parseHitwh(ls: Line[]): ExtractedCourse[] {
 }
 
 /** vertical category-label fragments of the UPC table (never course names on their own) */
-const UPC_LABELS = new Set(['通识', '教育', '课程', '思政', '类课', '程', '基础', '素养', '大类', '专业', '必修', '选修', '国际', '自主', '发展', '跨学', '科课', '第二', '课堂', '活动', '修读说明', '续表', '算法', '类', '应用', '双语']);
+const UPC_LABELS = new Set(['通识', '教育', '课程', '思政', '类课', '程', '基础', '素养', '大类', '专业', '必修', '选修', '国际', '自主', '发展', '跨学', '科课', '第二', '课堂', '活动', '修读说明', '续表', '算法', '类', '应用', '双语',
+  // 2026-10-14: 080601 vertical 模块 fragments (电力拖动 / 电力系统 / 新能源 / 学科基础 / 跨学科) were glued to names ("…技术电力")
+  '电力', '拖动', '系统', '新能', '源', '新能源', '学科', '跨学']);
 const isNoise = (c: string) => !c || UPC_LABELS.has(c) || /^[\d，,、\s\-≥周S]+$/.test(c) || !HAN.test(c);
 const isEnglish = (l: string) => !HAN.test(l) && /[A-Za-z]{2}/.test(l);
 const isHeader = (l: string) => /^(课程 \| 课程|课程编码|类别 \| 模块|续表)/.test(l) || /培养方案$|学院$|^·\s*\d+\s*·$/.test(l);
-/** "数据结构Data Structure" -> 数据结构 + English tail (the f4 layout prints both names in one cell); "数据分析（Python）" is not split */
+/** "数据结构Data Structure" -> 数据结构 + English tail (the f4 layout prints both names in one cell); "数据分析（Python）" is not split.
+ *  2026-10-14: also "程序设计（C）Programming（C）" (bracket after the English word) and "深度学习 deep Learning" (lower-case start). */
 export function splitEnglish(cell: string): { han: string; en: string } {
   if (!HAN.test(cell)) return { han: '', en: cell };
-  const m = cell.match(/^(.*[\p{Script=Han}）)])\s*([A-Z][a-z]+(?:\s.*)?)$/u);
+  const m = cell.match(/^(.*[\p{Script=Han}）)])\s*([A-Za-z][a-z]+(?:[\s（(].*)?)$/u);
   return m && !HAN.test(m[2]!) && !/[（(]$/.test(m[1]!) ? { han: m[1]!, en: m[2]! } : { han: cell, en: '' };
 }
 const isProse = (c: string) => /[，；：。≥]|学分|修读/.test(c);
@@ -217,10 +220,14 @@ function parseSdu(pages: PageText[], warnings: string[]): ExtractedCourse[] {
       const pm = t.match(/^\[\[第(\d+)页\]\]$/);
       if (pm) { page = Number(pm[1]); continue; }
       if (!t.includes('|')) { if (/^[A-H]方向/.test(t)) module = t; continue; }
-      let c = cellsOf(t);
+      let c = cellsOf(t.replace(/^\|\s*/, ''));
       if (c.some((x) => /应修(小计|说明)|合计$/.test(x))) continue;
       // drop leading vertical-label fragments ("学科 | sd…", "专业 | 任选 | sd…" -> already one cell each, "创 | 稷下创新 | 稷下创新")
-      while (c.length > 2 && /^[\p{Script=Han}]{1,4}$/u.test(c[0]!) && (SDU_CODE.test(c[1]!) || HAN.test(c[1]!))) c = c.slice(1);
+      // 2026-10-14: HTML tables (SDU 080902) also start rows with an empty cell ("| 通选类国际化课程 | 2 …") or a spaced label
+      // ("创新 创业 计划 | 稷下创新 | 稷下创新 | 2 …", glued to "创新 创业 计划稷下创新稷下创新")
+      while (c.length > 1 && c[0] === '') c = c.slice(1);
+      while (c.length > 2 && (/^[\p{Script=Han}]{1,4}$/u.test(c[0]!) || /^[\p{Script=Han}]{1,4}(\s+[\p{Script=Han}]{1,4})+$/u.test(c[0]!)) && (SDU_CODE.test(c[1]!) || HAN.test(c[1]!))) c = c.slice(1);
+      c = c.filter((x, j) => j === 0 || x !== c[j - 1] || !HAN.test(x)); // a name printed twice in adjacent cells
       const ci = c.findIndex((x) => SDU_CODE.test(x));
       const k = c.findIndex((x, j) => j > ci && NUM.test(x));
       if (k < 0) continue;

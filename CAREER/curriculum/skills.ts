@@ -80,7 +80,7 @@ export const TOOL_NAME_LITERAL: Record<string, RegExp> = {
   'hardware.pcb': /PCB|Altium|印制电路板/i,
   'semiconductor.hdl': /Verilog|VHDL/i,
   'semiconductor.eda': /EDA|Cadence|Synopsys/i,
-  'embedded.plc': /PLC|可编程控制器|可编程逻辑控制器/i,
+  'embedded.plc': /PLC|可编程控制|可编程逻辑控制器/i, // 2026-10-14 expert: 可编程控制 (技术) is a spelling of PLC
   'mechanical.cad': /CAD|SolidWorks|AutoCAD/i,
   'mechanical.fea': /有限元|ANSYS|Abaqus/i,
   'foundation.matlab': /MATLAB/i,
@@ -177,7 +177,7 @@ export const TOOL_TERMS: Record<string, RegExp> = {
   'hardware.pcb': /PCB|Altium|印制电路板/i,
   'semiconductor.hdl': /Verilog|VHDL|硬件描述语言/i,
   'semiconductor.eda': /EDA|Cadence|Synopsys|电子设计自动化/i,
-  'embedded.plc': /PLC|可编程控制器|可编程逻辑控制器/i,
+  'embedded.plc': /PLC|可编程控制|可编程逻辑控制器/i, // 2026-10-14 expert: 可编程控制 (技术) is a spelling of PLC
   'mechanical.cad': /CAD|SolidWorks|AutoCAD|计算机辅助设计/i,
   'mechanical.fea': /有限元|ANSYS|Abaqus/i,
   'foundation.matlab': /MATLAB/i,
