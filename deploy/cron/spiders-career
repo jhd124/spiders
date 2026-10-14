@@ -1,10 +1,12 @@
 # /etc/cron.d/spiders-career — installed by deploy/deploy.sh on every deploy (do not edit on the server).
-# Monthly CAREER pipeline (crawl -> LLM extraction (cached) -> ingest -> skill tagging):
-# 03:17 Asia/Shanghai on the 1st of each month. flock prevents overlap with a manual run.
+# Monthly chain, 03:17 Asia/Shanghai on the 1st, stops at the first failing step (&&):
+#   1) career:all              CAREER crawl -> LLM extraction (cached) -> ingest -> skill tagging
+#   2) jobs:all                JOBS crawl -> clean -> ingest -> JD term tagging -> salary_stat
+#   3) jobs:reclassify -- --llm  LLM fallback for zero-skill postings (= jobs:ingest --no-sources --llm;
+#                              jobs:all passes flags to the crawler, not to ingest, so --llm goes here)
+#   4) jobs:compare            occupation skill list vs postings -> /var/log/spiders-compare-YYYY-MM-DD.txt
+# One flock for the whole chain (-n: skip if a manual run holds it). Log: /var/log/spiders-career.log
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CRON_TZ=Asia/Shanghai
-17 3 1 * * root flock -n /tmp/spiders-career.lock docker exec spiders npm run career:all >> /var/log/spiders-career.log 2>&1
-# Monthly JOBS pipeline (public job postings: crawl -> clean -> ingest -> JD skill terms -> salary_stat), no LLM by default.
-# 04:47 on the 1st, after CAREER; its own lock so a long CAREER run doesn't block it.
-47 4 1 * * root flock -n /tmp/spiders-jobs.lock docker exec spiders npm run jobs:all >> /var/log/spiders-jobs.log 2>&1
+17 3 1 * * root flock -n /tmp/spiders-career.lock bash -c 'echo "=== $(date -Is) monthly start"; docker exec spiders npm run career:all && docker exec spiders npm run jobs:all && docker exec spiders npm run jobs:reclassify -- --llm && docker exec spiders npm run -s jobs:compare > /var/log/spiders-compare-$(date +\%F).txt; rc=$?; echo "=== $(date -Is) monthly end rc=$rc"; exit $rc' >> /var/log/spiders-career.log 2>&1

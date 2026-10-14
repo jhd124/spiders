@@ -270,8 +270,10 @@ npm run test:career                                                             
 
 ## 定时任务（deploy/cron/spiders-career）
 
-- 每月 1 日 03:17（Asia/Shanghai，`CRON_TZ`）在服务器上跑 `docker exec spiders npm run career:all`，用 `flock -n /tmp/spiders-career.lock` 防止和手动运行重叠，日志写到 `/var/log/spiders-career.log`。
-- 每次部署时 `deploy/deploy.sh` 都会把这个文件装到 `/etc/cron.d/spiders-career`，内容没变就跳过。改时间只需改仓库里的这个文件。
+- 每月 1 日 03:17（Asia/Shanghai，`CRON_TZ`）在服务器上按顺序跑一条链，前一步失败就停（`&&`）：`career:all` → `jobs:all` → `jobs:reclassify -- --llm`（模型补技能；`jobs:all` 的参数只传给爬虫，所以 `--llm` 放在这一步）→ `jobs:compare`（对照表存到 `/var/log/spiders-compare-YYYY-MM-DD.txt`）。
+- 整条链共用一把锁 `flock -n /tmp/spiders-career.lock`（手动在跑时本次跳过），日志写 `/var/log/spiders-career.log`，每次有开始/结束行和退出码。原来 04:47 单独的 jobs 任务已删除。
+- 每次部署时 `deploy/deploy.sh` 都会把这个文件装到 `/etc/cron.d/spiders-career`，内容没变就跳过。手动安装：
+  `sudo install -m 0644 -o root -g root /path/to/app/deploy/cron/spiders-career /etc/cron.d/spiders-career`
 
 ## 专家决策（取代原来的开放问题）
 

@@ -36,7 +36,7 @@ export function JobsDemandPage({ code }: { code?: string }) {
         </select>
         <label className="small"><input type="checkbox" checked={onlyFlags} onChange={(e) => setOnlyFlags(e.target.checked)} /> 只看标记</label>
         <span className="spacer" />
-        <span className="muted small">占比 = 提到该技能的岗位 / 该职业已归类且描述不过短的岗位（全部年份）。清单来自 occupation_skills.csv；未列入且占比 ≥ {all[0]?.gap_high ?? 20}% 标「高频未列入」，核心且占比 &lt; {all[0]?.core_low ?? 5}% 标「核心低频」（阈值 JOBS_GAP_HIGH / JOBS_CORE_LOW）。</span>
+        <span className="muted small">占比 = 提到该技能的岗位 / 该职业已归类且描述不过短的岗位（全部年份）。清单来自 occupation_skills.csv；未列入且占比 ≥ {all[0]?.gap_high ?? 20}% 标「高频未列入」，工具与技术类核心且占比 &lt; {all[0]?.core_low ?? 5}% 标「核心低频」（专业知识类不标：职位描述一般不写课程名式知识）（阈值 JOBS_GAP_HIGH / JOBS_CORE_LOW）。</span>
       </div>
       {err && <div className="pad"><div className="error">{err}</div></div>}
       {occ && (

@@ -4,7 +4,8 @@
  * Eligible postings: classified (occupation_code set), JD not too short (jd_too_short = 0), all years.
  * Both sides use skill.id (occupation_skill.skill_id and job_posting_skill.skill_id reference the same skill table).
  * Flags: 高频未列入 = not in the occupation list and freq >= JOBS_GAP_HIGH % (default 20);
- *        核心低频   = core in the list and freq < JOBS_CORE_LOW % (default 5).
+ *        核心低频   = core in the list, skill_type = 工具与技术, and freq < JOBS_CORE_LOW % (default 5).
+ *        专业知识/通用能力 core skills are never flagged (expert 2026-10-14: JDs don't name course-style knowledge).
  */
 import Database from 'better-sqlite3';
 import { CAREER_DB } from '../CAREER/db.js';
@@ -37,7 +38,9 @@ export function updateShortJdFlags(db: Database.Database, min = MIN_JD_CHARS()) 
 }
 
 export type SkillStatus = 'core' | 'general' | '未列入';
-export interface CompareRow { skill_id: string; skill_name: string; status: SkillStatus; postings: number; eligible: number; freq_pct: number; flag: '' | '高频未列入' | '核心低频' }
+/** only tool-type core skills can be 核心低频 */
+export const TOOL_TYPE = '工具与技术';
+export interface CompareRow { skill_id: string; skill_name: string; skill_type: string | null; status: SkillStatus; postings: number; eligible: number; freq_pct: number; flag: '' | '高频未列入' | '核心低频' }
 export interface OccupationCompare {
   occupation_code: string; occupation_name: string;
   eligible: number; too_short: number; sample_from: string | null; sample_to: string | null;
@@ -55,7 +58,9 @@ export function skillComparison(db: Database.Database, opts: { occupation?: stri
   const hitsQ = db.prepare(`SELECT k.skill_id, count(DISTINCT p.id) n FROM job_posting p JOIN job_posting_skill k ON k.posting_id = p.id
       WHERE p.occupation_code = ? AND p.jd_too_short = 0 GROUP BY k.skill_id`);
   const listQ = db.prepare('SELECT skill_id, importance FROM occupation_skill WHERE occupation_code = ?');
-  const names = new Map((db.prepare('SELECT id, name FROM skill').all() as { id: string; name: string }[]).map((r) => [r.id, r.name]));
+  const skillRows = db.prepare('SELECT id, name, skill_type FROM skill').all() as { id: string; name: string; skill_type: string }[];
+  const names = new Map(skillRows.map((r) => [r.id, r.name]));
+  const types = new Map(skillRows.map((r) => [r.id, r.skill_type]));
   return occs.map((o) => {
     const s = sampleQ.get(o.code) as { eligible: number | null; too_short: number | null; d_min: string | null; d_max: string | null };
     const eligible = s.eligible ?? 0;
@@ -66,8 +71,8 @@ export function skillComparison(db: Database.Database, opts: { occupation?: stri
       const n = hits.get(id) ?? 0;
       const freq = eligible ? Math.round((1000 * n) / eligible) / 10 : 0;
       const status: SkillStatus = listed.get(id) ?? '未列入';
-      const flag = status === '未列入' && eligible > 0 && freq >= gapHigh ? '高频未列入' : status === 'core' && eligible > 0 && freq < coreLow ? '核心低频' : '';
-      return { skill_id: id, skill_name: names.get(id) ?? id, status, postings: n, eligible, freq_pct: freq, flag };
+      const flag = status === '未列入' && eligible > 0 && freq >= gapHigh ? '高频未列入' : status === 'core' && types.get(id) === TOOL_TYPE && eligible > 0 && freq < coreLow ? '核心低频' : '';
+      return { skill_id: id, skill_name: names.get(id) ?? id, skill_type: types.get(id) ?? null, status, postings: n, eligible, freq_pct: freq, flag };
     });
     const rank = { core: 0, general: 1, 未列入: 2 } as const;
     rows.sort((a, b) => b.freq_pct - a.freq_pct || rank[a.status] - rank[b.status] || a.skill_name.localeCompare(b.skill_name, 'zh'));
@@ -83,7 +88,7 @@ export function formatComparison(list: OccupationCompare[], opts: { all?: boolea
   const out: string[] = [];
   for (const o of list) {
     out.push(`## ${o.occupation_code} ${o.occupation_name}`);
-    out.push(`样本：${o.eligible} 条（已归类、描述不少于阈值，全部年份 ${o.sample_from ?? '—'} ~ ${o.sample_to ?? '—'}；描述过短未计入 ${o.too_short} 条）。标记：未列入且 ≥${o.gap_high}% = 高频未列入；核心且 <${o.core_low}% = 核心低频`);
+    out.push(`样本：${o.eligible} 条（已归类、描述不少于阈值，全部年份 ${o.sample_from ?? '—'} ~ ${o.sample_to ?? '—'}；描述过短未计入 ${o.too_short} 条）。标记：未列入且 ≥${o.gap_high}% = 高频未列入；工具类核心且 <${o.core_low}% = 核心低频（专业知识不标）`);
     out.push('| 技能 | id | 清单 | 岗位数 | 占比 | 标记 |', '|---|---|---|---|---|---|');
     const shown = o.rows.filter((r) => opts.all || r.status !== '未列入' || r.freq_pct >= minPct);
     for (const r of shown) out.push(`| ${r.skill_name} | ${r.skill_id} | ${STATUS_LABEL[r.status]} | ${r.postings}/${r.eligible} | ${r.freq_pct}% | ${r.flag} |`);

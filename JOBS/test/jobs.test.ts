@@ -411,6 +411,7 @@ test('jd_too_short flag (migration 024): set on reclassify, out of skill demand 
   const ins = db.prepare(`INSERT INTO occupation_skill (occupation_code, skill_id, importance, extraction_method) VALUES ('2-02-10-03', ?, ?, 'expert')`);
   ins.run('software.java', 'core');
   ins.run('software.testing', 'core');
+  ins.run('software.linux', 'core');
   ins.run('software.python', 'general');
   const [o] = skillComparison(db, { occupation: '2-02-10-03' });
   assert.ok(o);
@@ -419,7 +420,10 @@ test('jd_too_short flag (migration 024): set on reclassify, out of skill demand 
   assert.equal(o.sample_from, '2026-10-01');
   const r = (id: string) => o.rows.find((x) => x.skill_id === id)!;
   assert.deepEqual([r('software.java').postings, r('software.java').freq_pct, r('software.java').status, r('software.java').flag], [2, 100, 'core', '']);
-  assert.deepEqual([r('software.testing').postings, r('software.testing').flag], [0, '核心低频'], 'listed core skill with 0 hits is shown and flagged');
+  assert.equal(r('software.testing').postings, 0, 'listed core skill with 0 hits is shown');
+  assert.equal(r('software.testing').skill_type, '专业知识');
+  assert.equal(r('software.testing').flag, '', '专业知识 core skill never flagged 核心低频');
+  assert.deepEqual([r('software.linux').skill_type, r('software.linux').postings, r('software.linux').flag], ['工具与技术', 0, '核心低频'], 'tool-type core skill at 0% flagged');
   assert.equal(r('software.python').status, 'general');
   const gap = r('software.db-sql');
   assert.deepEqual([gap.status, gap.freq_pct, gap.flag], ['未列入', 100, '高频未列入']);

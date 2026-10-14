@@ -39,7 +39,7 @@ JOBS/stats.ts         薪资窗口内（默认最近 24 个月）职业 × 城�
 ## 运行
 
 ```bash
-npm run jobs:all        # crawl → clean → ingest → 技能 → 统计（cron：每月 1 日 04:47）
+npm run jobs:all        # crawl → clean → ingest → 技能 → 统计（cron：每月 1 日 03:17 career:all 之后链式执行，见 CAREER/README 定时任务）
 npm run jobs:crawl -- --max-pages=10 --keywords=Java,算法 --budget=400
 npm run jobs:ingest -- --llm      # 服务器上：无词表命中的岗位走 deepseek 兜底
 npm run jobs:stats      # 只重算 salary_stat（JOBS_MIN_SAMPLE=5）
@@ -93,7 +93,7 @@ npm run jobs:ingest         # 同上，但先 upsert data/clean/jobs-upc.json
 - **Occupation skill list vs postings**: `npm run jobs:compare [-- --occupation=<code>] [--all] [--gap-high=20] [--core-low=5] [--min-pct=5]`
   prints, per occupation, every listed skill (also at 0 hits) plus unlisted skills ≥ min-pct: postings mentioning it / eligible postings
   (classified, not 描述过短, all years), share %, list status (核心 / 一般 / 未列入), and flags 高频未列入 (unlisted, ≥ `JOBS_GAP_HIGH`, default 20%)
-  and 核心低频 (core, < `JOBS_CORE_LOW`, default 5%). Admin console: 岗位技能需求 tab (`#/jobs/<code>`, API `GET /api/jobs/compare?occupation=`), sortable, flagged rows highlighted.
+  and 核心低频 (core **and skill_type 工具与技术**, < `JOBS_CORE_LOW`, default 5%; 专业知识 core skills such as 操作系统原理 are never flagged — expert 2026-10-14). Admin console: 岗位技能需求 tab (`#/jobs/<code>`, API `GET /api/jobs/compare?occupation=`), sortable, flagged rows highlighted.
   Both sides use `skill.id` (occupation_skill.skill_id and job_posting_skill.skill_id reference the same skill table).
 - **Which postings `--llm` sends**: classified or multi-role (`occupation_code IS NOT NULL OR multi_role = 1`), `jd_text` non-empty,
   zero rows in job_posting_skill, `llm_attempted_at IS NULL` (with `--force`: every in-scope posting without an alias tag). No length filter.
