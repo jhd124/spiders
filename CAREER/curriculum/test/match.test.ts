@@ -152,7 +152,7 @@ test('expert aliases tag courses deterministically; admin delete is tombstoned; 
   addAlias(db, '代数与几何', '线性代数', 'expert');
   assert.equal(tag('h:dg').length, 1);
   assert.throws(() => addAlias(db, '线性代数', '离散数学', 'e'), /already a skill name/);
-  assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note\n[\s\S]*代数与几何,线性代数,expert,added by expert/);
+  assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note,match\n[\s\S]*代数与几何,线性代数,expert,added by expert,contains/);
   db.close();
 });
 
@@ -178,6 +178,43 @@ test('expert 2026-10-14: 微机原理 / 单片机 -> 单片机原理, 嵌入式�
   const row = readFileSync(OCC_SKILLS_CSV, 'utf8').split('\n').filter((l) => l.startsWith('2-02-09-04,'));
   assert.match(row.find((l) => l.includes('"电子测量"'))!, /,general,/);
   assert.equal(row.filter((l) => l.includes(',core,')).length, 5);
+  db.close();
+});
+
+test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice courses skipped, 027 cleanup', async () => {
+  const { loadSkillAliases, applyAliasRules, addAlias, exportAliasesCsv, ALIAS_CSV } = await import('../../aliases.js');
+  const { aliasHits, isPracticeCourse } = await import('../tag.js');
+  assert.equal(aliasHits('电子技术', 'exact', '电子技术'), true);
+  assert.equal(aliasHits('电子技术', 'exact', '电力电子技术'), false);
+  assert.equal(aliasHits('电子技术', 'contains', '电力电子技术'), true);
+  assert.equal(aliasHits('电路（I）', 'exact', '电路(I)'), true, 'bracket width ignored');
+  assert.equal(aliasHits('电路（I）', 'exact', '电路（II）'), false, 'bracket suffix kept in exact mode');
+  for (const n of ['电路分析实验', '电子技术课程设计', '自动控制实践(1)', '生产实习', '金工实训']) assert.equal(isPracticeCourse(n), true, n);
+  assert.equal(isPracticeCourse('实验设计方法'), false);
+  assert.equal(aliasHits('电路分析', 'contains', '电路分析实验'), false);
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  const course = (id: string, name: string) => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'x', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('x', '080601', ?, 'u', 'llm', '必修', 0)").run(id);
+  };
+  course('x:dz', '电子技术'); course('x:dl', '电力电子技术'); course('x:sy', '电路分析实验'); course('x:c1', '电路（I）'); course('x:gj', '高级语言程序设计'); course('x:jc', '集成电路设计');
+  // a stale alias tag on a practice course (pre-027) and an LLM tag on it: the alias one goes, the LLM one stays
+  db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, source, evidence_type) VALUES ('x:sy', 'electrical.circuits', 0.5, 'pdf_parse', 0, 'rule:alias', '课名推断'), ('x:sy', 'hardware.analog', 0.5, 'llm', 0, 'llm', '课名推断')").run();
+  assert.deepEqual(loadSkillAliases(db, ALIAS_CSV, () => {}).bad, []);
+  applyAliasRules(db);
+  const sk = (c: string) => (db.prepare("SELECT s.name FROM course_skill cs JOIN skill s ON s.id = cs.skill_id WHERE cs.course_id = ? AND cs.source = 'rule:alias' ORDER BY s.name").all(c) as { name: string }[]).map((r) => r.name);
+  assert.deepEqual(sk('x:dz'), ['数字逻辑', '模拟电路']);
+  assert.ok(!sk('x:dl').includes('模拟电路'), '电力电子技术 is not exact 电子技术');
+  assert.deepEqual(sk('x:sy'), [], 'practice course: alias tag removed');
+  assert.equal((db.prepare("SELECT count(*) n FROM course_skill WHERE course_id = 'x:sy' AND source = 'llm'").get() as { n: number }).n, 1, 'LLM tag untouched');
+  assert.deepEqual(sk('x:c1'), ['电路原理']);
+  assert.deepEqual(sk('x:gj'), [], '高级语言程序设计 is not C/C++');
+  assert.deepEqual(sk('x:jc'), []);
+  assert.equal((db.prepare("SELECT match FROM skill_alias WHERE alias = '电子技术' AND skill_id = (SELECT id FROM skill WHERE name = '数字逻辑')").get() as { match: string }).match, 'exact');
+  addAlias(db, '实验设计方法', '概率与统计', 'expert', 'exact');
+  assert.deepEqual(sk('x:gj'), []);
+  assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note,match\n[\s\S]*电子技术,模拟电路,[^\n]*,exact\n/);
   db.close();
 });
 

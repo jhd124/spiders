@@ -1,7 +1,7 @@
 /**
  * JD -> skill extraction.
  *  1. deterministic term match (no LLM): skill names, CAREER skill_alias, plus JOBS/seeds/jd_skill_terms.csv
- *     (JD vocabulary like 'Linux'/'PyTorch' is kept OUT of skill_alias on purpose: skill_alias also tags courses by name).
+ *     (exact-match aliases are course-name-only and skipped here; JD vocabulary like 'Linux'/'PyTorch' is kept OUT of skill_alias on purpose: skill_alias also tags courses by name).
  *     ASCII terms match on word boundaries, case-insensitive; CJK terms by substring.
  *  2. LLM fallback hook, only for postings with no term hit, only when `--llm` is passed AND LLM_* env is configured
  *     (the server's lib/llm providerFromEnv / deepseek-chat). Never runs locally without a key; tests use MockProvider.
@@ -38,7 +38,7 @@ export function loadTerms(db: Database.Database, csvPath = JD_TERMS_CSV): Term[]
   const known = new Set((db.prepare('SELECT id FROM skill').all() as { id: string }[]).map((r) => r.id));
   const raw: [string, string][] = [];
   for (const s of db.prepare('SELECT id, name FROM skill').all() as { id: string; name: string }[]) for (const t of nameTerms(s.name)) raw.push([t, s.id]);
-  for (const a of db.prepare('SELECT alias, skill_id FROM skill_alias').all() as { alias: string; skill_id: string }[]) raw.push([a.alias, a.skill_id]);
+  for (const a of db.prepare("SELECT alias, skill_id FROM skill_alias WHERE match = 'contains'").all() as { alias: string; skill_id: string }[]) raw.push([a.alias, a.skill_id]);
   for (const r of parseCsv(readFileSync(csvPath, 'utf8'))) if (r.term && r.skill_id && known.has(r.skill_id.trim())) raw.push([r.term, r.skill_id.trim()]);
   const seen = new Set<string>();
   const out: Term[] = [];

@@ -1,4 +1,4 @@
-alias,skill_name,source,note
+alias,skill_name,source,note,match
 SolidWorks,CAD建模,expert 2026-10-13,016
 AutoCAD,CAD建模,expert 2026-10-13,016
 ANSYS,有限元分析,expert 2026-10-13,016
@@ -42,3 +42,35 @@ ANSYS,有限元分析,expert 2026-10-13,016
 电力工程基础,电力系统分析,expert 2026-10-14,第二批
 电气工程基础,电力系统分析,expert 2026-10-14,第二批
 可编程控制,PLC编程,expert 2026-10-14,第二批 tool alias (expert: an alias is another spelling of the tool name)
+电路理论基础,电路原理,expert 2026-10-14,第二批,
+电路分析,电路原理,expert 2026-10-14,第二批 also 高等电路分析,
+电路（I）,电路原理,expert 2026-10-14,第二批 SDU 080601; exact (bare 电路 would hit 集成电路/电路设计),exact
+电路（II）,电路原理,expert 2026-10-14,第二批 SDU 080601,exact
+电路A(1),电路原理,expert 2026-10-14,第二批 HIT-WH 080801,exact
+电路C,电路原理,expert 2026-10-14,第二批 HIT-WH 080801,exact
+电路基础A,电路原理,expert 2026-10-14,第二批 HIT-WH 080701,exact
+模拟电子技术,模拟电路,expert 2026-10-14,第二批 also 模拟电子技术基础B,
+电子线路基础,模拟电路,expert 2026-10-14,第二批 full name only (no bare 电子线路),exact
+电子技术,模拟电路,expert 2026-10-14,第二批 SDU 080601; exact (not 电力电子技术/模拟电子技术),exact
+电子技术,数字逻辑,expert 2026-10-14,第二批 SDU 080601; exact,exact
+数字电子技术,数字逻辑,expert 2026-10-14,第二批 also 数字电子技术基础B,
+传感器与检测基础,传感器与检测技术,expert 2026-10-14,第二批 UPC,
+通信电子线路,射频与微波,expert 2026-10-14,第二批 HIT-WH 通信电子线路B,
+微波技术与天线,射频与微波,expert 2026-10-14,第二批 HIT-WH 080701,
+系统建模与仿真基础,控制系统建模与仿真,expert 2026-10-14,第二批 HIT-WH 080801; exact (not 雷达系统建模与仿真基础),exact
+鲁棒与自适应控制,现代控制理论,expert 2026-10-14,第二批 HIT-WH 080801,
+计算机组成原理,计算机组成与体系结构,expert 2026-10-14,第二批,
+C语言程序设计,C/C++,expert 2026-10-14,第二批 not 高级语言程序设计 (expert),
+程序设计（C）,C/C++,expert 2026-10-14,第二批 UPC 080601; exact,exact
+电磁场,电磁场与电磁波,expert 2026-10-14,第二批 also 工程电磁场,
+概率论与数理统计,概率与统计,expert 2026-10-14,第二批,
+概率与数理统计,概率与统计,expert 2026-10-14,第二批 SDU,
+微积分,高等数学,expert 2026-10-14,第二批 HIT-WH 微积分A/B,
+信息论,信息论与编码,expert 2026-10-14,第二批 信息论基础 / 信息论,
+电力拖动自动控制系统,电机驱动与控制,expert 2026-10-14,第二批 UPC/SDU 080601,
+电力电子装置及应用,电力电子技术,expert 2026-10-14,第二批 SDU 080601,
+电力系统自动控制技术,电力系统分析,expert 2026-10-14,第二批 SDU 080601,
+电力系统故障分析,电力系统分析,expert 2026-10-14,第二批 SDU 080601,
+高电压绝缘技术,高电压技术,expert 2026-10-14,第二批 SDU 080601,
+高电压试验技术,高电压技术,expert 2026-10-14,第二批 SDU 080601,
+软件过程与项目管理,软件工程方法,expert 2026-10-14,第二批,

@@ -53,9 +53,9 @@ aliases.get('/', (c) => c.json(withDb((db) => ({
   skills: db.prepare('SELECT id, name, skill_type FROM skill ORDER BY primary_domain_id, name').all(),
 }))));
 aliases.post('/', async (c) => {
-  const b = (await c.req.json().catch(() => ({}))) as { alias?: string; skill?: string; by?: string };
+  const b = (await c.req.json().catch(() => ({}))) as { alias?: string; skill?: string; by?: string; match?: string };
   if (!b.alias?.trim() || !b.skill || !b.by?.trim()) throw new HttpError(400, 'alias, skill and by are required');
-  return c.json(withDb((db) => { try { return addAlias(db, b.alias!, b.skill!, b.by!.trim()); } catch (e) { return fail(e); } }), 201);
+  return c.json(withDb((db) => { try { return addAlias(db, b.alias!, b.skill!, b.by!.trim(), b.match === 'exact' ? 'exact' : 'contains'); } catch (e) { return fail(e); } }), 201);
 });
 aliases.delete('/:alias', (c) => {
   const by = c.req.query('by')?.trim();

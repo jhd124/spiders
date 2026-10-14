@@ -66,12 +66,12 @@ export function classifyCoreNames(db: Database.Database): { checked: number; upd
     { rid: number; weight: number | null; evidence_type: StoredEvidenceType; course: string; skill: string; core: number }[];
   const upd = db.prepare('UPDATE course_skill SET evidence_type = ?, weight = ? WHERE rowid = ?');
   // an expert alias of the skill in the course name counts as "the course name is the skill" (代数与几何 -> 线性代数)
-  const aliasOf = new Map<string, string[]>();
-  for (const a of db.prepare('SELECT a.alias, s.name FROM skill_alias a JOIN skill s ON s.id = a.skill_id').all() as { alias: string; name: string }[])
-    aliasOf.set(a.name, [...(aliasOf.get(a.name) ?? []), aliasNorm(a.alias)]);
+  const aliasOf = new Map<string, { alias: string; match: AliasMatch }[]>();
+  for (const a of db.prepare('SELECT a.alias, a.match, s.name FROM skill_alias a JOIN skill s ON s.id = a.skill_id').all() as { alias: string; match: AliasMatch; name: string }[])
+    aliasOf.set(a.name, [...(aliasOf.get(a.name) ?? []), a]);
   let updated = 0, coreName = 0;
   for (const r of rows) {
-    const viaAlias = r.core === 1 && r.evidence_type !== '原文明确' && (aliasOf.get(r.skill) ?? []).some((a) => a.length >= 2 && aliasNorm(r.course).includes(a));
+    const viaAlias = r.core === 1 && r.evidence_type !== '原文明确' && (aliasOf.get(r.skill) ?? []).some((a) => aliasHits(a.alias, a.match, r.course));
     const t = viaAlias ? '核心课名' : storedEvidenceType(r.evidence_type, r.core === 1, r.course, r.skill);
     if (t === '核心课名') coreName++;
     const w = tagWeight(t);
@@ -110,6 +110,13 @@ export function addCoreNameTags(db: Database.Database): { inserted: number; dele
 
 /** course name normalized for alias matching: no whitespace, no trailing (…) qualifier, lower-case */
 export const aliasNorm = (s: string) => s.replace(/\s+/g, '').replace(/[（(][^）)]*[）)]$/, '').toLowerCase();
+/** exact-match form: whole name, spaces dropped, full/half-width brackets unified, bracket suffix kept (电路（I） ≠ 电路（II）) */
+export const exactNorm = (s: string) => s.replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').toLowerCase();
+export type AliasMatch = 'contains' | 'exact';
+/** practice courses (expert 2026-10-14) are never alias-tagged: 电路分析实验, 电子技术课程设计, 自动控制实践(1) */
+export const isPracticeCourse = (name: string) => /(课程设计|实验|实习|实训|实践)$/.test(aliasNorm(name));
+export const aliasHits = (alias: string, match: AliasMatch | string | null | undefined, course: string) =>
+  !isPracticeCourse(course) && (match === 'exact' ? exactNorm(course) === exactNorm(alias) : aliasNorm(alias).length >= 2 && aliasNorm(course).includes(aliasNorm(alias)));
 
 /**
  * Expert aliases (skill_alias) drive deterministic tags, no LLM (expert 2026-10-13): a course whose name equals or contains an alias
@@ -119,8 +126,8 @@ export const aliasNorm = (s: string) => s.replace(/\s+/g, '').replace(/[（(][^�
  */
 export interface AliasTagStats { matched: number; inserted: number; took_over: number; kept: number; rejected: number; deleted: number; updated: number }
 export function applyAliasTags(db: Database.Database): AliasTagStats {
-  const aliases = (db.prepare(`SELECT a.alias, a.skill_id, s.name AS skill, s.skill_type FROM skill_alias a JOIN skill s ON s.id = a.skill_id`).all() as { alias: string; skill_id: string; skill: string; skill_type: string }[])
-    .map((a) => ({ ...a, n: aliasNorm(a.alias) })).filter((a) => a.n.length >= 2);
+  const aliases = (db.prepare(`SELECT a.alias, a.skill_id, a.match, s.name AS skill, s.skill_type FROM skill_alias a JOIN skill s ON s.id = a.skill_id`).all() as { alias: string; skill_id: string; match: AliasMatch; skill: string; skill_type: string }[])
+    .map((a) => ({ ...a, n: aliasNorm(a.alias) })).filter((a) => a.match === 'exact' || a.n.length >= 2);
   const courses = db.prepare(`SELECT c.id, c.name, MAX(mc.is_core = 1) AS core FROM major_course mc JOIN course c ON c.id = mc.course_id
     WHERE mc.review_status <> 'rejected' GROUP BY c.id`).all() as { id: string; name: string; core: number }[];
   const rejected = new Set((db.prepare("SELECT course_id || '|' || skill_id AS k FROM course_skill_rejected").all() as { k: string }[]).map((r) => r.k));
@@ -139,7 +146,7 @@ export function applyAliasTags(db: Database.Database): AliasTagStats {
   for (const c of courses) {
     const cn = aliasNorm(c.name);
     for (const a of aliases) {
-      if (!cn.includes(a.n)) continue;
+      if (!aliasHits(a.alias, a.match, c.name)) continue;
       matched++;
       if (rejected.has(`${c.id}|${a.skill_id}`)) { rej++; continue; }
       const k = `${c.id}|${a.skill_id}`;

@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { parseCsv } from '../lib/csv.js';
-import { applyAliasTags, classifyCoreNames } from './curriculum/tag.js';
+import { aliasHits, applyAliasTags, classifyCoreNames } from './curriculum/tag.js';
 import { applyBlockTypeConfig, backfillImpliedTypes } from './curriculum/load.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -19,7 +19,9 @@ const skillId = (db: Database.Database, nameOrId: string) =>
   (db.prepare('SELECT id FROM skill WHERE name = @n UNION ALL SELECT id FROM skill WHERE id = @n').get({ n: nameOrId.trim() }) as { id: string } | undefined)?.id;
 
 export function loadSkillAliases(db: Database.Database, path = ALIAS_CSV, log: (s: string) => void = console.log) {
-  const ins = db.prepare(`INSERT INTO skill_alias (alias, skill_id, source, created_by, created_at) VALUES (?, ?, ?, 'seed', ?) ON CONFLICT (alias) DO NOTHING`);
+  const ins = db.prepare(`INSERT INTO skill_alias (alias, skill_id, source, created_by, created_at, match) VALUES (?, ?, ?, 'seed', ?, ?) ON CONFLICT (alias, skill_id) DO NOTHING`);
+  // the seed owns the match mode of its own rows (an exact switch added to an already-loaded alias is applied)
+  const setMatch = db.prepare(`UPDATE skill_alias SET match = ? WHERE alias = ? AND skill_id = ? AND created_by = 'seed' AND match <> ?`);
   const dead = db.prepare('SELECT 1 FROM skill_alias_deleted WHERE alias = ?');
   const bad: string[] = [];
   let added = 0;
@@ -29,7 +31,10 @@ export function loadSkillAliases(db: Database.Database, path = ALIAS_CSV, log: (
     const id = skillId(db, r.skill_name || r.skill_id || '');
     if (!id) { bad.push(`${alias} -> ${r.skill_name}: unknown skill`); continue; }
     if (dead.get(alias)) continue;
-    added += ins.run(alias, id, r.source?.trim() || 'expert', new Date().toISOString()).changes;
+    const match = (r.match?.trim() || 'contains');
+    if (match !== 'contains' && match !== 'exact') { bad.push(`${alias} -> ${r.skill_name}: match "${match}" (contains | exact)`); continue; }
+    added += ins.run(alias, id, r.source?.trim() || 'expert', new Date().toISOString(), match).changes;
+    setMatch.run(match, alias, id, match);
   }
   if (bad.length) console.error(`[career] ERROR skill_aliases.csv: ${bad.length} row(s) NOT loaded:\n  ${bad.join('\n  ')}`);
   log(`[career] skill aliases: +${added} from seed${bad.length ? `, ${bad.length} bad` : ''}`);
@@ -45,24 +50,25 @@ export function applyAliasRules(db: Database.Database) {
   return { types, blocks, tags, core_name_retyped: core.updated };
 }
 
-export interface AliasRow { alias: string; skill_id: string; skill: string; skill_type: string; source: string; created_by: string | null; created_at: string | null; courses: number }
+export interface AliasRow { alias: string; skill_id: string; skill: string; skill_type: string; source: string; created_by: string | null; created_at: string | null; match: string; courses: number }
 export function listAliases(db: Database.Database): AliasRow[] {
-  return db.prepare(`SELECT a.alias, a.skill_id, s.name skill, s.skill_type, a.source, a.created_by, a.created_at,
-      (SELECT count(*) FROM course_skill cs WHERE cs.skill_id = a.skill_id AND cs.source = 'rule:alias'
-         AND instr(lower(replace((SELECT name FROM course WHERE id = cs.course_id), ' ', '')), lower(replace(a.alias, ' ', ''))) > 0) courses
-    FROM skill_alias a JOIN skill s ON s.id = a.skill_id ORDER BY s.name, a.alias`).all() as AliasRow[];
+  const rows = db.prepare(`SELECT a.alias, a.skill_id, s.name skill, s.skill_type, a.source, a.created_by, a.created_at, a.match
+    FROM skill_alias a JOIN skill s ON s.id = a.skill_id ORDER BY s.name, a.alias`).all() as Omit<AliasRow, 'courses'>[];
+  const tagged = db.prepare(`SELECT c.name FROM course_skill cs JOIN course c ON c.id = cs.course_id WHERE cs.skill_id = ? AND cs.source = 'rule:alias'`);
+  return rows.map((r) => ({ ...r, courses: (tagged.all(r.skill_id) as { name: string }[]).filter((c) => aliasHits(r.alias, r.match, c.name)).length }));
 }
 
-export function addAlias(db: Database.Database, alias: string, skill: string, by: string) {
+export function addAlias(db: Database.Database, alias: string, skill: string, by: string, match: 'contains' | 'exact' = 'contains') {
   const a = alias.trim();
   if (a.length < 2) throw new Error('alias must have at least 2 characters');
+  if (match !== 'contains' && match !== 'exact') throw new Error(`match must be contains | exact`);
   const id = skillId(db, skill);
   if (!id) throw new Error(`unknown skill ${skill}`);
   const clash = db.prepare('SELECT 1 FROM skill WHERE name = ?').get(a);
   if (clash) throw new Error(`"${a}" is already a skill name`);
   return db.transaction(() => {
-    db.prepare(`INSERT INTO skill_alias (alias, skill_id, source, created_by, created_at) VALUES (?, ?, 'expert', ?, ?)
-      ON CONFLICT (alias) DO UPDATE SET skill_id = excluded.skill_id, source = 'expert', created_by = excluded.created_by, created_at = excluded.created_at`).run(a, id, by, new Date().toISOString());
+    db.prepare(`INSERT INTO skill_alias (alias, skill_id, source, created_by, created_at, match) VALUES (?, ?, 'expert', ?, ?, ?)
+      ON CONFLICT (alias, skill_id) DO UPDATE SET source = 'expert', created_by = excluded.created_by, created_at = excluded.created_at, match = excluded.match`).run(a, id, by, new Date().toISOString(), match);
     db.prepare('DELETE FROM skill_alias_deleted WHERE alias = ?').run(a);
     return applyAliasRules(db);
   })();
@@ -81,6 +87,6 @@ export function deleteAlias(db: Database.Database, alias: string, by: string) {
 
 export function exportAliasesCsv(db: Database.Database): string {
   const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-  const rows = db.prepare('SELECT a.alias, s.name skill, a.source, a.created_by FROM skill_alias a JOIN skill s ON s.id = a.skill_id ORDER BY s.name, a.alias').all() as { alias: string; skill: string; source: string; created_by: string | null }[];
-  return ['alias,skill_name,source,note', ...rows.map((r) => [r.alias, r.skill, r.source, r.created_by && r.created_by !== 'seed' ? `added by ${r.created_by}` : ''].map(q).join(','))].join('\n') + '\n';
+  const rows = db.prepare('SELECT a.alias, s.name skill, a.source, a.created_by, a.match FROM skill_alias a JOIN skill s ON s.id = a.skill_id ORDER BY s.name, a.alias').all() as { alias: string; skill: string; source: string; created_by: string | null; match: string }[];
+  return ['alias,skill_name,source,note,match', ...rows.map((r) => [r.alias, r.skill, r.source, r.created_by && r.created_by !== 'seed' ? `added by ${r.created_by}` : '', r.match].map(q).join(','))].join('\n') + '\n';
 }
