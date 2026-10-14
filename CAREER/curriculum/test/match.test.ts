@@ -1,9 +1,9 @@
 /** 职业 → 技能 → 专业 matching: deterministic, no LLM. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const TMP = mkdtempSync(join(tmpdir(), 'career-match-'));
 process.env.SPIDERS_DATA_DIR = TMP;
@@ -153,6 +153,31 @@ test('expert aliases tag courses deterministically; admin delete is tombstoned; 
   assert.equal(tag('h:dg').length, 1);
   assert.throws(() => addAlias(db, '线性代数', '离散数学', 'e'), /already a skill name/);
   assert.match(exportAliasesCsv(db), /^alias,skill_name,source,note\n[\s\S]*代数与几何,线性代数,expert,added by expert/);
+  db.close();
+});
+
+test('expert 2026-10-14: 微机原理 / 单片机 -> 单片机原理, 嵌入式系统 -> 嵌入式软件开发; 026 drops 微机原理与接口技术; 电子测量 general for 2-02-09-04', async () => {
+  const { loadSkillAliases, applyAliasRules, ALIAS_CSV } = await import('../../aliases.js');
+  const db = new Database(process.env.CAREER_DB!);
+  db.pragma('foreign_keys = OFF');
+  const seed = readFileSync(ALIAS_CSV, 'utf8');
+  assert.doesNotMatch(seed, /^微机原理与接口技术,/m);
+  db.prepare("INSERT OR IGNORE INTO skill_alias (alias, skill_id, source, created_by, created_at) VALUES ('微机原理与接口技术', 'embedded.mcu', 'expert', 'seed', 'x')").run();
+  db.exec(readFileSync(join(dirname(OCC_SKILLS_CSV), '..', 'migrations', '026_alias_weiji.sql'), 'utf8'));
+  assert.equal(db.prepare("SELECT 1 FROM skill_alias WHERE alias = '微机原理与接口技术'").get(), undefined);
+  const course = (id: string, name: string) => {
+    db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'w', ?, 'u', 'llm')").run(id, name);
+    db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('w', '080701', ?, 'u', 'llm', '必修', 0)").run(id);
+  };
+  course('w:wj', '微机原理'); course('w:wjj', '微机原理与接口技术'); course('w:dp', '单片机控制'); course('w:es', '嵌入式系统设计'); course('w:ek', '嵌入式系统开发');
+  assert.deepEqual(loadSkillAliases(db, ALIAS_CSV, () => {}).bad, []);
+  applyAliasRules(db);
+  const sk = (c: string) => (db.prepare("SELECT s.name FROM course_skill cs JOIN skill s ON s.id = cs.skill_id WHERE cs.course_id = ? ORDER BY s.name").all(c) as { name: string }[]).map((r) => r.name);
+  for (const c of ['w:wj', 'w:wjj', 'w:dp']) assert.deepEqual(sk(c), ['单片机原理'], c);
+  for (const c of ['w:es', 'w:ek']) assert.deepEqual(sk(c), ['嵌入式软件开发'], c);
+  const row = readFileSync(OCC_SKILLS_CSV, 'utf8').split('\n').filter((l) => l.startsWith('2-02-09-04,'));
+  assert.match(row.find((l) => l.includes('"电子测量"'))!, /,general,/);
+  assert.equal(row.filter((l) => l.includes(',core,')).length, 5);
   db.close();
 });
 
