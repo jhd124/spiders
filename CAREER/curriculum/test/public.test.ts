@@ -44,7 +44,7 @@ migrate(process.env.CAREER_DB!, () => {});
   db.close();
 }
 
-const get = async (p: string) => { const r = await publicApi.request(p); return { status: r.status, body: await r.json() as any, text: JSON.stringify(await publicApi.request(p).then((x) => x.json())) }; };
+const get = async (p: string) => { const r = await publicApi.request(p); const body = (await r.json()) as any; return { status: r.status, body, text: JSON.stringify(body) }; };
 
 test('public API is GET-only', async () => {
   for (const m of ['POST', 'PUT', 'DELETE', 'PATCH']) assert.equal((await publicApi.request('/occupations', { method: m })).status, 405, m);
