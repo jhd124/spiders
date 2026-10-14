@@ -14,12 +14,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const Database = (await import('better-sqlite3')).default;
 const { migrate } = await import('../../CAREER/migrate.js');
 const { decodeText, parseSalary, statMonthly, normCity, normEducation, normExperience, quarterOf, dedupeKey } = await import('../normalize.js');
-const { classifyTitle, classifyPosting } = await import('../occupations.js');
+const { classifyTitle, classifyPosting, normalizeTitle, embeddedEvidence } = await import('../occupations.js');
 const { cleanOne } = await import('../upc/clean.js');
 const { pickPublic } = await import('../upc/crawler.js');
-const { upsertPostings, reclassifyAll } = await import('../ingest.js');
+const { upsertPostings, reclassifyAll, applyEmbeddedRule } = await import('../ingest.js');
 const { tagPostings, matchTerms, makeTerm, nameTerms, llmExtractSkills } = await import('../skills.js');
-const { computeSalaryStats, percentile, salaryWindowStart } = await import('../stats.js');
+const { computeSalaryStats, percentile, salaryWindowStart, sourceLabel } = await import('../stats.js');
 const { MockProvider } = await import('../../lib/llm.js');
 
 test('parseSalary: units, ranges, 薪, yearly, open-ended, 面议, daily', () => {
@@ -157,8 +157,8 @@ test('migration 021 + ingest + term tagging + salary_stat', async () => {
   assert.equal(row.quarter, '2026Q4');
   assert.equal(row.p50_month, 13000); // midpoints 11000 13000 13000 14000 16000
   assert.match(row.method_note, /midpoint/);
-  assert.ok(db.prepare(`SELECT 1 FROM salary_stat WHERE city = '全国' AND occupation_code = '2-02-10-03'`).get());
-  const ai = db.prepare(`SELECT sample_size, p50_month FROM salary_stat WHERE occupation_code = '2-02-38-01' AND city = '全国' AND channel = '全部' AND education = '全部' AND quarter NOT LIKE '%-%'`).get() as { sample_size: number; p50_month: number | null };
+  assert.ok(db.prepare(`SELECT 1 FROM salary_stat WHERE city = '全部' AND occupation_code = '2-02-10-03'`).get());
+  const ai = db.prepare(`SELECT sample_size, p50_month FROM salary_stat WHERE occupation_code = '2-02-38-01' AND city = '全部' AND channel = '全部' AND education = '全部' AND quarter NOT LIKE '%-%'`).get() as { sample_size: number; p50_month: number | null };
   assert.ok(ai.sample_size > 0 && ai.sample_size < 5);
   assert.equal(ai.p50_month, null, 'AI below min sample: count only');
   db.close();
@@ -180,7 +180,7 @@ test('LLM fallback hook with a stub provider: only listed skill ids survive', as
   db.prepare(`INSERT INTO job_posting (id, site, channel, title_raw, jd_text, occupation_code, source_url, fetched_at, extraction_method)
     VALUES ('t:1', 't', '校招', '研究员（AI）', '要求有良好的科研能力', '2-02-38-01', 'u', '2026-10-14', 'api')`).run();
   const r = await tagPostings(db, { llm: new MockProvider(() => '{"skills":[{"id":"ai.ml","quote":"科研"}]}'), log: () => {} });
-  assert.equal(r.llmTagged, 1);
+  assert.ok(r.llmTagged >= 1, 'zero-skill postings incl. earlier ones go to the LLM');
   assert.deepEqual(db.prepare(`SELECT method, confidence FROM job_posting_skill WHERE posting_id = 't:1'`).get(), { method: 'llm', confidence: 0.5 });
   db.close();
 });
@@ -248,4 +248,120 @@ test('salary window start: rolling 24 months to quarter start, or fixed', () => 
   assert.equal(salaryWindowStart(new Date(2026, 9, 14), 24, undefined), '2024-10-01');
   assert.equal(salaryWindowStart(new Date(2027, 0, 5), 24, undefined), '2025-01-01');
   assert.equal(salaryWindowStart(new Date(2026, 9, 14), 24, '2024-10-01'), '2024-10-01');
+});
+
+test('title normalization: leading year, trailing location, bracketed codes', () => {
+  assert.equal(normalizeTitle('2026C/C++开发工程师'), 'C/C++开发工程师');
+  assert.equal(normalizeTitle('2027届 Java开发工程师'), 'Java开发工程师');
+  assert.equal(normalizeTitle('C/C++软件工程师 (J10605)'), 'C/C++软件工程师');
+  assert.equal(normalizeTitle('C/C++软件工程师（J10605）'), 'C/C++软件工程师');
+  assert.equal(normalizeTitle('硬件工程师-深圳'), '硬件工程师');
+  assert.equal(normalizeTitle('技术支持管培生-山东'), '技术支持管培生');
+  assert.equal(normalizeTitle('算法工程师（深圳）'), '算法工程师');
+  assert.equal(normalizeTitle('阿里云管培生（商业技术工程师方向）'), '阿里云管培生（商业技术工程师方向）', 'non-code bracket kept');
+});
+
+test('expert classification batch 2 (34 no_match titles, 2026-10-14)', () => {
+  const SW = '2-02-10-03', EMB = '2-02-10-06', DA = '2-02-30-09', AI = '2-02-38-01';
+  const cls = (t: string) => { const c = classifyPosting(t); return [c.code, c.multiRole]; };
+  for (const t of ['C/C++开发工程师', '2026C/C++开发工程师', 'C/C++工程师', 'C/C++开发实习生', 'C/C++软件工程师 (J10605)', 'QT/C++开发工程师', 'Qt/C++开发工程师']) {
+    assert.deepEqual(cls(t), [SW, false], t);
+    assert.equal(classifyPosting(t).reason, 'cpp', t);
+  }
+  for (const t of ['STM32/单片机 软硬件开发', '硬件工程师', '硬件工程师-深圳']) assert.deepEqual(cls(t), [EMB, false], t);
+  assert.deepEqual(classifyPosting('市场/数据分析师'), { code: DA, confidence: 0.8, multiRole: false, reason: 'first_role' });
+  assert.deepEqual(classifyPosting('电气/视觉工程师'), { code: AI, confidence: 0.8, multiRole: false, reason: 'first_role' });
+  for (const t of ['实施工程师', '技术支持管培生-山东', '技术支持管培生-陕西', '测评交付经理', '2027届校招-测评交付经理']) assert.deepEqual([classifyPosting(t).code, classifyPosting(t).reason], [null, 'support'], t);
+  for (const t of ['数字芯片设计', '集成电路设计-深圳']) assert.deepEqual([classifyPosting(t).code, classifyPosting(t).reason], [null, 'chip'], t);
+  for (const t of ['腾讯云智研发2026届暑期实习生', '腾讯云智研发2027届暑期实习生招聘', '阿里云管培生（商业技术工程师方向）', '技术类', '工程技术岗', '实习生', '综合实习生', '新零售校招生'])
+    assert.deepEqual([classifyPosting(t).code, classifyPosting(t).reason], [null, 'generic'], t);
+  for (const t of ['上海视觉艺术学院招聘启事', '品牌宣传实习生', '新媒体专员', '非技术类']) assert.equal(classifyPosting(t).code, null, t);
+  // the C/C++ slash must not make a 3-item multi-role title
+  assert.equal(classifyPosting('C/C++、Java开发工程师').multiRole, false);
+  assert.equal(classifyPosting('软件测试 | 硬件测试').code, SW);
+});
+
+test('embedded evidence terms', () => {
+  assert.equal(embeddedEvidence('熟悉单片机开发'), '单片机');
+  assert.equal(embeddedEvidence('有 FreeRTOS 经验'), 'RTOS');
+  assert.equal(embeddedEvidence('负责Linux驱动开发'), '驱动开发');
+  assert.equal(embeddedEvidence('数据驱动业务增长，具备自我驱动力'), null);
+  assert.equal(embeddedEvidence('后台服务开发'), null);
+});
+
+function postingRow(db: InstanceType<typeof Database>, id: string, title: string, jd: string) {
+  const c = classifyPosting(title);
+  db.prepare(`INSERT INTO job_posting (id, site, channel, title_raw, jd_text, occupation_code, occupation_confidence, classify_reason, source_url, fetched_at, extraction_method)
+    VALUES (?, 'upc', '校招', ?, ?, ?, ?, ?, 'u', '2026-10-14', 'api')`).run(id, title, jd, c.code, c.confidence, c.reason);
+}
+
+test('LLM fallback picks up zero-skill postings already marked extracted; no LLM call without a provider; --force re-sends', async () => {
+  const db = db0();
+  db.exec('DELETE FROM job_posting_skill; DELETE FROM job_posting;');
+  postingRow(db, 'z1', '研究员（AI）', '要求有良好的科研能力');
+  postingRow(db, 'z2', '算法工程师', '负责模型研究');
+  // the server state: term pass ran earlier, skills_extracted_at set, zero skills
+  db.prepare(`UPDATE job_posting SET skills_extracted_at = '2026-10-13T00:00:00Z'`).run();
+  let calls = 0;
+  const stub = new MockProvider(() => { calls++; return '{"skills":[{"id":"ai.ml","quote":"研究"}]}'; });
+  const off = await tagPostings(db, { log: () => {} });
+  assert.equal(off.scanned, 0);
+  assert.equal(off.llmPending, 2, 'pending is reported without --llm');
+  assert.equal((db.prepare('SELECT count(llm_attempted_at) n FROM job_posting').get() as { n: number }).n, 0, 'nothing marked without --llm');
+  const on = await tagPostings(db, { llm: stub, log: () => {} });
+  assert.deepEqual([on.llmSent, on.llmTagged, calls], [2, 2, 2]);
+  assert.equal((db.prepare('SELECT count(llm_attempted_at) n FROM job_posting').get() as { n: number }).n, 2);
+  // a second --llm run does not re-send
+  assert.equal((await tagPostings(db, { llm: stub, log: () => {} })).llmSent, 0);
+  // an attempted posting whose LLM answer was empty is not re-sent either, unless forced
+  const empty = new MockProvider(() => { calls++; return '{"skills":[]}'; });
+  db.exec(`DELETE FROM job_posting_skill`);
+  assert.equal((await tagPostings(db, { llm: empty, log: () => {} })).llmSent, 0);
+  const forced = await tagPostings(db, { all: true, llm: stub, log: () => {} });
+  assert.equal(forced.scanned, 2, '--force re-runs the term pass on all');
+  assert.equal(forced.llmSent, 2, '--force re-sends every posting without a term hit');
+  db.close();
+});
+
+test('C/C++ postings move to 嵌入式 when the JD/skills are embedded (after tagging), and back if not', async () => {
+  const db = db0();
+  db.exec('DELETE FROM job_posting_skill; DELETE FROM job_posting;');
+  postingRow(db, 'c1', 'C/C++开发工程师', '熟悉STM32单片机，有RTOS经验');
+  postingRow(db, 'c2', 'C/C++软件工程师 (J10605)', '负责后台服务开发，熟悉Linux网络编程');
+  postingRow(db, 'c3', 'QT/C++开发工程师', '负责上位机界面开发');
+  await tagPostings(db, { log: () => {} });
+  const r = applyEmbeddedRule(db);
+  assert.deepEqual([r.cpp, r.embedded], [3, 1]);
+  const get = (id: string) => db.prepare('SELECT occupation_code, classify_reason FROM job_posting WHERE id = ?').get(id);
+  assert.deepEqual(get('c1'), { occupation_code: '2-02-10-06', classify_reason: 'cpp_embedded' });
+  assert.deepEqual(get('c2'), { occupation_code: '2-02-10-03', classify_reason: 'cpp' });
+  // reclassify keeps the embedded move (no churn), the rule re-checks it
+  const rc = reclassifyAll(db);
+  assert.equal(rc.changed, 0);
+  assert.deepEqual(get('c1'), { occupation_code: '2-02-10-06', classify_reason: 'cpp_embedded' });
+  db.prepare(`UPDATE job_posting SET jd_text = '负责后台开发' WHERE id = 'c1'`).run();
+  await tagPostings(db, { all: true, log: () => {} });
+  applyEmbeddedRule(db);
+  assert.deepEqual(get('c1'), { occupation_code: '2-02-10-03', classify_reason: 'cpp' });
+  db.close();
+});
+
+test('salary labels: no 全国, source label, low-sample flag, 校招 row identical to 全部 not stored', async () => {
+  assert.equal(sourceLabel(['upc'], ['校招'], '2024Q4-2026Q4', 97), '来源：中国石油大学（华东）就业网校招岗位，2024Q4–2026Q4，样本 97 条');
+  const db = db0();
+  db.exec('DELETE FROM job_posting_skill; DELETE FROM job_posting; DELETE FROM salary_stat;');
+  const base = { ...cleaned[0]!, published_at: '2026-09-01', channel: '校招' as const, education: '本科' as const, city: '青岛', site: 'upc' };
+  const ps = Array.from({ length: 40 }, (_, i) => ({ ...base, id: `upc:s${i}`, dedupe_key: `s${i}`, title_raw: 'Java开发工程师', salary_raw: '8000-10000', salary_min_month: 8000 + i * 50, salary_max_month: 10000, salary_note: '元' }));
+  upsertPostings(db, ps);
+  const s = computeSalaryStats(db, { now: new Date('2026-10-14T08:00:00Z'), log: () => {} });
+  assert.ok(s.dupChannel > 0);
+  assert.equal(db.prepare(`SELECT 1 FROM salary_stat WHERE city = '全国'`).get(), undefined, 'never 全国');
+  assert.equal(db.prepare(`SELECT 1 FROM salary_stat WHERE channel = '校招'`).get(), undefined, '校招 rows identical to 全部 are dropped');
+  const ov = db.prepare(`SELECT sample_size, source_label, sample_note, low_sample FROM salary_overview WHERE occupation_code = '2-02-10-03' AND education = '全部'`).get();
+  assert.deepEqual(ov, { sample_size: 40, source_label: '来源：中国石油大学（华东）就业网校招岗位，2024Q4–2026Q4，样本 40 条', sample_note: '样本较少，仅供参考', low_sample: 1 });
+  computeSalaryStats(db, { now: new Date('2026-10-14T08:00:00Z'), lowSample: 30, log: () => {} });
+  assert.equal((db.prepare(`SELECT low_sample FROM salary_overview WHERE occupation_code = '2-02-10-03' AND education = '全部'`).get() as { low_sample: number }).low_sample, 0, 'threshold configurable');
+  const views = (db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'salary_overview'`).get() as { sql: string }).sql;
+  assert.ok(!views.includes('全国'));
+  db.close();
 });

@@ -40,7 +40,7 @@ const postings = defineDataset({
 const salary = defineDataset({
   key: 'salary',
   title: 'JOBS · 薪资（职业 × 学历）',
-  description: '默认展示口径：最近 24 个月（窗口见 window 列）、全国、全部渠道，按职业 × 最低学历汇总的月薪 P25/P50/P75。样本 < 30 只给数量。面议、多岗位合写的职位不计入。按城市/季度的细分行仍在 salary_stat 表里。',
+  description: '默认展示口径：最近 24 个月（窗口见 window 列）、样本内全部城市、全部渠道，按职业 × 最低学历汇总的月薪 P25/P50/P75。数据来源见「来源」列（目前只有中国石油大学（华东）就业网校招岗位，不代表全国）。样本 < 30 只给数量；样本 < 100 标注「样本较少，仅供参考」。面议、多岗位合写的职位不计入。按城市/季度的细分行仍在 salary_stat 表里。',
   kind: 'sqlite',
   dbPath: CAREER_DB,
   table: 'salary_overview',
@@ -59,6 +59,8 @@ const salary = defineDataset({
     { column: 'p25_month', label: 'P25 月薪', format: 'number' },
     { column: 'p50_month', label: '中位数月薪', format: 'number' },
     { column: 'p75_month', label: 'P75 月薪', format: 'number' },
+    { column: 'sample_note', label: '提示' },
+    { column: 'source_label', label: '来源' },
   ],
   defaultSort: 'id',
 });

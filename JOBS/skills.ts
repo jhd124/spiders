@@ -81,41 +81,58 @@ export async function llmExtractSkills(provider: ChatProvider, title: string, jd
 }
 
 /**
- * Tag postings whose skills were not extracted yet (or all with `all`). Alias/term tags are rebuilt deterministically;
- * LLM tags are kept unless the posting is re-tagged with an LLM again.
+ * Skill tagging in two passes.
+ *  1. Term pass: postings with skills_extracted_at NULL (all in scope with `all`/--force). Alias/term tags are rebuilt
+ *     deterministically and skills_extracted_at is set (= "term pass done", nothing more).
+ *  2. LLM pass (only when a provider is given): in-scope postings with a JD, ZERO skills and llm_attempted_at NULL
+ *     (with `all`/--force: every posting without a term tag, even if the LLM tagged it before). llm_attempted_at is set after each call, so a run never re-sends a posting
+ *     unless forced. Without a provider nothing is marked as LLM-attempted, so a later --llm run still picks them up.
  */
 export async function tagPostings(db: Database.Database, opts: { all?: boolean; llm?: ChatProvider | null; llmLimit?: number; log?: (s: string) => void } = {}) {
   const log = opts.log ?? console.log;
   const terms = loadTerms(db);
+  const scope = '(occupation_code IS NOT NULL OR multi_role = 1)';
   const rows = db
-    .prepare(`SELECT id, title_raw, jd_text FROM job_posting WHERE (occupation_code IS NOT NULL OR multi_role = 1) ${opts.all ? '' : 'AND skills_extracted_at IS NULL'}`)
+    .prepare(`SELECT id, title_raw, jd_text FROM job_posting WHERE ${scope} ${opts.all ? '' : 'AND skills_extracted_at IS NULL'}`)
     .all() as { id: string; title_raw: string; jd_text: string | null }[];
   const now = new Date().toISOString();
   const delAlias = db.prepare("DELETE FROM job_posting_skill WHERE posting_id = ? AND method = 'alias'");
   const ins = db.prepare(`INSERT INTO job_posting_skill (posting_id, skill_id, method, matched_text, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT (posting_id, skill_id) DO UPDATE SET method = excluded.method, matched_text = excluded.matched_text, confidence = excluded.confidence, created_at = excluded.created_at`);
   const done = db.prepare('UPDATE job_posting SET skills_extracted_at = ? WHERE id = ?');
-  let tagged = 0, tags = 0;
-  const noHit: typeof rows = [];
+  let tagged = 0, tags = 0, noHit = 0;
   db.transaction(() => {
     for (const r of rows) {
       delAlias.run(r.id);
       const hits = matchTerms(`${r.title_raw}\n${r.jd_text ?? ''}`, terms);
       for (const [sid, term] of hits) ins.run(r.id, sid, 'alias', term, 0.8, now);
-      if (hits.size) { tagged++; tags += hits.size; } else noHit.push(r);
+      if (hits.size) { tagged++; tags += hits.size; } else noHit++;
       done.run(now, r.id);
     }
   })();
-  let llmTagged = 0;
-  if (opts.llm && noHit.length) {
+  let llmTagged = 0, llmSent = 0, llmPending = 0;
+  const pendingSql = `SELECT id, title_raw, jd_text FROM job_posting p WHERE ${scope} AND jd_text IS NOT NULL AND jd_text <> ''
+      ${opts.all ? `AND NOT EXISTS (SELECT 1 FROM job_posting_skill k WHERE k.posting_id = p.id AND k.method = 'alias')` : 'AND NOT EXISTS (SELECT 1 FROM job_posting_skill k WHERE k.posting_id = p.id) AND llm_attempted_at IS NULL'} ORDER BY id`;
+  const pending = db.prepare(pendingSql).all() as { id: string; title_raw: string; jd_text: string }[];
+  llmPending = pending.length;
+  if (opts.llm && pending.length) {
     const skills = db.prepare('SELECT id, name FROM skill ORDER BY id').all() as { id: string; name: string }[];
-    for (const r of noHit.slice(0, opts.llmLimit ?? 200)) {
-      if (!r.jd_text) continue;
+    const mark = db.prepare('UPDATE job_posting SET llm_attempted_at = ? WHERE id = ?');
+    for (const r of pending.slice(0, opts.llmLimit ?? LLM_LIMIT)) {
       const out = await llmExtractSkills(opts.llm, r.title_raw, r.jd_text, skills);
-      for (const s of out) ins.run(r.id, s.skill_id, 'llm', s.quote, 0.5, new Date().toISOString());
+      const at = new Date().toISOString();
+      db.transaction(() => {
+        for (const s of out) ins.run(r.id, s.skill_id, 'llm', s.quote, 0.5, at);
+        mark.run(at, r.id);
+      })();
+      llmSent++;
       if (out.length) llmTagged++;
     }
   }
-  log(`[jobs] skills: ${rows.length} postings scanned, ${tagged} tagged by terms (${tags} tags), ${noHit.length} without a term hit${opts.llm ? `, ${llmTagged} tagged by LLM` : ' (LLM fallback off)'}`);
-  return { scanned: rows.length, tagged, tags, noHit: noHit.length, llmTagged };
+  log(`[jobs] skills: ${rows.length} postings scanned, ${tagged} tagged by terms (${tags} tags), ${noHit} without a term hit; ${llmPending} with zero skills pending LLM` +
+    (opts.llm ? `, ${llmSent} sent to LLM, ${llmTagged} tagged by LLM` : ' (LLM fallback off: run with --llm)'));
+  return { scanned: rows.length, tagged, tags, noHit, llmPending, llmSent, llmTagged };
 }
+
+/** max postings sent to the LLM per run (JOBS_LLM_LIMIT) */
+export const LLM_LIMIT = Number(process.env.JOBS_LLM_LIMIT ?? 1000);

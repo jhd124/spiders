@@ -12,7 +12,7 @@ export interface OccupationRule {
   exclude?: RegExp;
 }
 
-const NOT_TECH = /销售|售前|客服|招商|行政|人事|财务|会计|商务|市场专员|司机|普工|操作工|(?<!网络|信息|数据)安全员|安全生产|安环|EHS|HSE|保安/i;
+const NOT_TECH = /非技术|新媒体|品牌|宣传|招聘启事|售前|客服|招商|行政|人事|财务|会计|商务|市场专员|司机|普工|操作工|(?<!网络|信息|数据)安全员|安全生产|安环|EHS|HSE|保安/i;
 /** expert exclusion words (2026-10-14): never a pilot occupation */
 const EXCLUDE_WORDS = /销售|教师|顾问|营销/;
 const TECH_WORD = /技术|研发|开发|软件|算法|数据|IT|工程|信息|网络|计算机|智能|程序|测试|运维|硬件/i;
@@ -38,7 +38,7 @@ export const OCCUPATION_RULES: OccupationRule[] = [
   {
     code: '2-02-10-06', name: '嵌入式系统设计工程技术人员',
     keywords: ['嵌入式', '单片机', '固件'],
-    include: /嵌入式|单片机|MCU|固件|驱动开发|底层软件|(?<![A-Za-z])BSP(?![A-Za-z])|FPGA|Linux驱动|RTOS/,
+    include: /嵌入式|单片机|STM32|硬件工程师|硬件开发|MCU|固件|驱动开发|底层软件|(?<![A-Za-z])BSP(?![A-Za-z])|FPGA|Linux驱动|RTOS/,
   },
   {
     code: '2-02-38-01', name: '人工智能工程技术人员',
@@ -82,7 +82,7 @@ export interface Classification {
   confidence: number | null;
   /** several roles listed in one title: unclassified, never in salary stats, skills still extracted */
   multiRole: boolean;
-  /** why it is (un)classified: 'rule' | 'first_role' | 'multi_role' | 'generic' | 'excluded_word' | 'mgmt_trainee' | 'design' | 'not_tech' | 'no_match' */
+  /** why it is (un)classified: 'rule' | 'first_role' | 'multi_role' | 'generic' | 'excluded_word' | 'mgmt_trainee' | 'design' | 'not_tech' | 'no_match' | 'support' | 'chip' | 'cpp' (C/C++ -> software) | 'cpp_embedded' (C/C++ moved to 嵌入式 by JD) */
   reason: string;
 }
 
@@ -95,24 +95,75 @@ function matchRules(t: string): string | null {
   return null;
 }
 
-/** title -> occupation + flags. Order: multi-role, generic, exclusion words, 管培, design, then rules (first alternative for 'a | b'). */
+export const SOFTWARE_CODE = '2-02-10-03';
+export const EMBEDDED_CODE = '2-02-10-06';
+/** C/C++ titles (classify_reason 'cpp'): software by title; moved to embedded after skill extraction if the JD is embedded */
+const CPP = /C\+\+|(?<![A-Za-z#])C语言/i;
+/** delivery / support roles: not in the 8 pilot occupations (expert 2026-10-14) */
+const SUPPORT = /实施工程师|技术支持|交付经理|交付工程师|售后/;
+/** chip titles: left for a later semiconductor batch */
+const CHIP = /芯片|集成电路|(?<![A-Za-z])IC设计|版图/i;
+/** a concrete role word; trainee/intern titles without one are generic */
+const ROLE_WORD = /开发|工程师|算法|测试|数据|软件|前端|后端|运维|硬件|嵌入式|分析|安全|Java|Python|C\+\+|网络/i;
+const TRAINEE = /(暑期)?(实习生|管培生|管理培训生|校招生|培训生)(招聘)?$/;
+const GENERIC_EXACT = /^(技术类|工程技术岗|技术岗|研发类|实习生|综合实习生)$/;
+
+const PLACES = '北京|上海|天津|重庆|深圳|广州|杭州|成都|武汉|南京|苏州|西安|济南|青岛|烟台|威海|潍坊|淄博|东营|临沂|济宁|合肥|长沙|郑州|沈阳|大连|厦门|福州|宁波|无锡|珠海|东莞|佛山|昆明|贵阳|南宁|南昌|太原|石家庄|哈尔滨|长春|兰州|乌鲁木齐|呼和浩特|海口|雄安|山东|山西|河北|河南|湖北|湖南|江苏|浙江|安徽|福建|江西|广东|广西|云南|贵州|四川|陕西|甘肃|青海|辽宁|吉林|黑龙江|内蒙古|宁夏|新疆|西藏|海南|全国';
+const LEAD_YEAR = /^(?:20\d{2}|\d{2})\s*(?:届|年)?(?:秋招|春招|校招)?[-—–_\s]*/;
+const TRAIL_PLACE = new RegExp(`(?:\\s*[-—–_·]\\s*(?:${PLACES})(?:[市省]|地区|区域)?|\\s*[（(](?:${PLACES})(?:[市省、,，/]|${PLACES})*[）)])\\s*$`);
+const TRAIL_CODE = /\s*[（(\[【]\s*[A-Za-z]{0,4}[-_]?\d{2,}[A-Za-z0-9-]*\s*[）)\]】]\s*$/;
+
+/** strip leading year ('2026', '2027届'), trailing location ('-深圳', '（深圳）') and bracketed codes ('(J10605)') before matching */
+export function normalizeTitle(title: string): string {
+  let t = title.replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 3; i++) {
+    const before = t;
+    t = t.replace(TRAIL_CODE, '').replace(TRAIL_PLACE, '').trim();
+    if (t === before) break;
+  }
+  const y = t.replace(LEAD_YEAR, '').trim();
+  return y.length ? y : t;
+}
+
+/** title -> occupation + flags. Order: normalize, multi-role, generic, support, chip, exclusion words, 管培, design, then rules (first TECH alternative for 'a / b'). */
 export function classifyPosting(title: string): Classification {
-  const t = title.replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  // 'C/C++', 'Qt/C++' are one skill, not two roles: protect the slash before splitting
+  const t = normalizeTitle(title).replace(/(?<![A-Za-z])(?:C|QT|Qt|qt)\s*[\/／]\s*C\+\+/g, 'C++');
   const c = t.replace(/\s+/g, '');
   const none = (reason: string, multiRole = false): Classification => ({ code: null, confidence: null, multiRole, reason });
   const items = c.replace(/[…]+|\.{3,}|等$/g, '').split(ROLE_SEP).filter((x) => x.length > 0);
   if (items.length >= MULTI_ROLE_MIN) return none('multi_role', true);
-  if (GENERIC.test(c)) return none('generic');
+  if (GENERIC.test(c) || GENERIC_EXACT.test(c)) return none('generic');
+  if (SUPPORT.test(c)) return none('support');
+  if (CHIP.test(c)) return none('chip');
   if (EXCLUDE_WORDS.test(c)) return none('excluded_word');
+  if (NOT_TECH.test(c) && !ROLE_WORD.test(c)) return none('not_tech');
+  const noParen = c.replace(/[（(][^）)]*[）)]/g, '');
   if (MGMT_TRAINEE.test(c) && !TECH_WORD.test(c.replace(MGMT_TRAINEE, ''))) return none('mgmt_trainee');
+  if (TRAINEE.test(noParen) && !ROLE_WORD.test(noParen.replace(TRAINEE, '').replace(/研发|技术|\d+届?|暑期/g, ''))) return none('generic');
   if (/设计/.test(c) && !DESIGN_TECH.test(c)) return none('design');
+  const hit = (code: string, reason: string): Classification =>
+    ({ code, confidence: 0.8, multiRole: false, reason: code === SOFTWARE_CODE && CPP.test(c) ? 'cpp' : reason });
   const alts = t.split(ALT_SEP).map((x) => x.replace(/\s+/g, '')).filter(Boolean);
   if (alts.length > 1) {
-    const code = matchRules(alts[0]!);
-    return code ? { code, confidence: 0.8, multiRole: false, reason: 'first_role' } : none(NOT_TECH.test(alts[0]!) ? 'not_tech' : 'no_match');
+    // first TECH alternative wins: '市场/数据分析师' -> 数据分析, '电气/视觉工程师' -> 视觉
+    for (const a of alts) { const code = matchRules(a); if (code) return hit(code, 'first_role'); }
+    const code = matchRules(c);
+    if (code) return hit(code, 'rule');
+    return none(NOT_TECH.test(alts[0]!) ? 'not_tech' : 'no_match');
   }
   const code = matchRules(c);
-  return code ? { code, confidence: 0.8, multiRole: false, reason: 'rule' } : none(NOT_TECH.test(c) ? 'not_tech' : 'no_match');
+  return code ? hit(code, 'rule') : none(NOT_TECH.test(c) ? 'not_tech' : 'no_match');
+}
+
+/** embedded terms that move a C/C++ posting to 嵌入式 after skill extraction (JOBS_EMBEDDED_TERMS=a,b,c overrides) */
+export const EMBEDDED_TERMS = (process.env.JOBS_EMBEDDED_TERMS ?? '单片机,RTOS,FreeRTOS,驱动开发,Linux驱动,设备驱动,驱动程序,驱动,嵌入式,MCU,STM32,固件,BSP,ARM Cortex,裸机,uboot,u-boot')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+/** '驱动' also appears in 数据驱动 / 业务驱动 / 驱动力: ignored */
+const DRIVE_FALSE = /数据驱动|业务驱动|价值驱动|技术驱动|创新驱动|驱动力|自我驱动|自驱/g;
+export function embeddedEvidence(text: string, terms = EMBEDDED_TERMS): string | null {
+  const t = text.replace(DRIVE_FALSE, '').toLowerCase();
+  return terms.find((x) => t.includes(x.toLowerCase())) ?? null;
 }
 
 /** title -> occupation; confidence 0.8 for an explicit title match, null when nothing matches */
@@ -121,5 +172,5 @@ export function classifyTitle(title: string): { code: string; confidence: number
   return r.code ? { code: r.code, confidence: r.confidence! } : null;
 }
 
-/** first-batch cities: city-level salary_stat rows are computed for these; every posting still counts in '全国' */
+/** first-batch cities: city-level salary_stat rows are computed for these; every posting still counts in city '全部' (all cities in the sample; never labelled 全国) */
 export const TARGET_CITIES = ['北京', '上海', '深圳', '杭州', '广州', '成都', '武汉', '济南', '青岛'];
