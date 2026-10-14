@@ -17,6 +17,7 @@
     "lib/**/*.ts",
     "MOOC/**/*.ts",
     "CAREER/**/*.ts",
+    "JOBS/**/*.ts",
     "scripts/**/*.ts",
     "web/server/**/*.ts",
     "web/shared/**/*.ts",

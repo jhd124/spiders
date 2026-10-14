@@ -113,6 +113,9 @@ export interface PoliteFetchOptions {
   delayMs?: number;
   retries?: number;
   headers?: Record<string, string>;
+  /** default GET; POST is for public search endpoints that the site's own (anonymous) UI calls the same way */
+  method?: 'GET' | 'POST';
+  body?: string;
 }
 
 /** Fetch a URL politely and return the body text. Throws on non-2xx after retries. */
@@ -149,6 +152,8 @@ async function politeResponse(url: string, opts: PoliteFetchOptions): Promise<Re
       res = await fetch(url, {
         headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/json;q=0.9,*/*;q=0.8', ...opts.headers },
         redirect: 'follow',
+        method: opts.method ?? 'GET',
+        body: opts.body,
       });
     } catch (err) {
       if (attempt >= retries) throw err;

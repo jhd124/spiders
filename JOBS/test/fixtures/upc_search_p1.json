@@ -1,0 +1,7 @@
+{"code":200,"data":{"total":"12","list":[
+{"zwid":"A1","zwmc":"Java开发工程师","dwmc":"青岛某某软件有限公司","gzlxmc":"全职","zwlbymc":"信息技术","gzszssmc":"山东省","gzszxmc":"山东省青岛市崂山区","gzdz":"青岛市崂山区","yxmc":"10000-16000","zwms":"熟悉Java、Spring Boot、MySQL，了解Redis和Linux，有分布式系统经验优先。","xlyqmc":"本科,硕士","fbrq":"2026-10-12","jltdyx":"hr@example.com"},
+{"zwid":"A2","zwmc":"算法工程师","dwmc":"北京某智能科技有限公司","gzlxmc":"全职","gzszxmc":"北京市海淀区","yxmc":"20000-30000","zwms":"负责深度学习模型训练，熟练使用PyTorch与Python，有计算机视觉、目标检测经验。","xlyqmc":"硕士,博士","fbrq":"2026-10-11"},
+{"zwid":"A3","zwmc":"算法工程师实习生","dwmc":"北京某智能科技有限公司","gzlxmc":"实习","gzszxmc":"北京市海淀区","yxmc":"3000-4000","zwms":"协助模型训练。","xlyqmc":"本科","fbrq":"2026-10-11"},
+{"zwid":"A4","zwmc":"安全员","dwmc":"某建设集团","gzlxmc":"全职","gzszxmc":"山东省济南市历下区","yxmc":"5000-6000","zwms":"负责施工现场安全生产。","xlyqmc":"不限,本科","fbrq":"2026-10-10"},
+{"zwid":"A5","zwmc":"嵌入式软件工程师","dwmc":"深圳某电子有限公司","gzlxmc":"全职","gzszxmc":"广东省深圳市南山区","yxmc":"面议","zwms":"STM32、FreeRTOS、C语言。","xlyqmc":"本科","fbrq":"2026-10-09"}
+]}}

@@ -5,3 +5,6 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 CRON_TZ=Asia/Shanghai
 17 3 1 * * root flock -n /tmp/spiders-career.lock docker exec spiders npm run career:all >> /var/log/spiders-career.log 2>&1
+# Monthly JOBS pipeline (public job postings: crawl -> clean -> ingest -> JD skill terms -> salary_stat), no LLM by default.
+# 04:47 on the 1st, after CAREER; its own lock so a long CAREER run doesn't block it.
+47 4 1 * * root flock -n /tmp/spiders-jobs.lock docker exec spiders npm run jobs:all >> /var/log/spiders-jobs.log 2>&1
