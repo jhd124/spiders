@@ -201,7 +201,12 @@ test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice
   course('x:dz', '电子技术'); course('x:dl', '电力电子技术'); course('x:sy', '电路分析实验'); course('x:c1', '电路（I）'); course('x:gj', '高级语言程序设计'); course('x:jc', '集成电路设计');
   // a stale alias tag on a practice course (pre-027) and an LLM tag on it: the alias one goes, the LLM one stays
   db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, source, evidence_type) VALUES ('x:sy', 'electrical.circuits', 0.5, 'pdf_parse', 0, 'rule:alias', '课名推断'), ('x:sy', 'hardware.analog', 0.5, 'llm', 0, 'llm', '课名推断')").run();
+  course('x:dd', '电路与电子技术基础'); course('x:ddy', '电路与电子技术基础实验'); course('x:xl', '电子线路（1）'); course('x:cc', '程序设计（C/C++）'); course('x:zc', '计算机组成与系统结构');
   assert.deepEqual(loadSkillAliases(db, ALIAS_CSV, () => {}).bad, []);
+  const logs: string[] = [];
+  const { applyAliasTags } = await import('../tag.js');
+  assert.equal(applyAliasTags(db, (l) => logs.push(l)).practice_removed, 1);
+  assert.deepEqual(logs, ['[career] practice alias tags removed: 1']);
   applyAliasRules(db);
   const sk = (c: string) => (db.prepare("SELECT s.name FROM course_skill cs JOIN skill s ON s.id = cs.skill_id WHERE cs.course_id = ? AND cs.source = 'rule:alias' ORDER BY s.name").all(c) as { name: string }[]).map((r) => r.name);
   assert.deepEqual(sk('x:dz'), ['数字逻辑', '模拟电路']);
@@ -211,6 +216,11 @@ test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice
   assert.deepEqual(sk('x:c1'), ['电路原理']);
   assert.deepEqual(sk('x:gj'), [], '高级语言程序设计 is not C/C++');
   assert.deepEqual(sk('x:jc'), []);
+  assert.deepEqual(sk('x:dd'), ['模拟电路', '电路原理']);
+  assert.deepEqual(sk('x:ddy'), []);
+  assert.deepEqual(sk('x:xl'), ['模拟电路']);
+  assert.deepEqual(sk('x:cc'), ['C/C++']);
+  assert.deepEqual(sk('x:zc'), ['计算机组成与体系结构']);
   assert.equal((db.prepare("SELECT match FROM skill_alias WHERE alias = '电子技术' AND skill_id = (SELECT id FROM skill WHERE name = '数字逻辑')").get() as { match: string }).match, 'exact');
   addAlias(db, '实验设计方法', '概率与统计', 'expert', 'exact');
   assert.deepEqual(sk('x:gj'), []);

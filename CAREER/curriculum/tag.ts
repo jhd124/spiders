@@ -124,8 +124,8 @@ export const aliasHits = (alias: string, match: AliasMatch | string | null | und
  * 工具与技术 -> 原文明确 1.0 (the tool is literally in the course name). Never touches an existing row (LLM, reviewed or other rule)
  * or an expert-rejected pair; unreviewed rule:alias rows whose alias is gone are deleted. Idempotent.
  */
-export interface AliasTagStats { matched: number; inserted: number; took_over: number; kept: number; rejected: number; deleted: number; updated: number }
-export function applyAliasTags(db: Database.Database): AliasTagStats {
+export interface AliasTagStats { matched: number; inserted: number; took_over: number; kept: number; rejected: number; deleted: number; updated: number; practice_removed: number }
+export function applyAliasTags(db: Database.Database, log: (s: string) => void = console.log): AliasTagStats {
   const aliases = (db.prepare(`SELECT a.alias, a.skill_id, a.match, s.name AS skill, s.skill_type FROM skill_alias a JOIN skill s ON s.id = a.skill_id`).all() as { alias: string; skill_id: string; match: AliasMatch; skill: string; skill_type: string }[])
     .map((a) => ({ ...a, n: aliasNorm(a.alias) })).filter((a) => a.match === 'exact' || a.n.length >= 2);
   const courses = db.prepare(`SELECT c.id, c.name, MAX(mc.is_core = 1) AS core FROM major_course mc JOIN course c ON c.id = mc.course_id
@@ -162,11 +162,16 @@ export function applyAliasTags(db: Database.Database): AliasTagStats {
       else kept++;
     }
   }
-  let deleted = 0;
-  for (const r of db.prepare("SELECT rowid AS rid, course_id, skill_id FROM course_skill WHERE source = 'rule:alias' AND reviewed = 0").all() as { rid: number; course_id: string; skill_id: string }[])
-    if (!want.has(`${r.course_id}|${r.skill_id}`)) deleted += db.prepare('DELETE FROM course_skill WHERE rowid = ?').run(r.rid).changes;
+  let deleted = 0, practice = 0;
+  for (const r of db.prepare("SELECT cs.rowid AS rid, cs.course_id, cs.skill_id, c.name FROM course_skill cs JOIN course c ON c.id = cs.course_id WHERE cs.source = 'rule:alias' AND cs.reviewed = 0").all() as { rid: number; course_id: string; skill_id: string; name: string }[])
+    if (!want.has(`${r.course_id}|${r.skill_id}`)) {
+      const n = db.prepare('DELETE FROM course_skill WHERE rowid = ?').run(r.rid).changes;
+      deleted += n;
+      if (isPracticeCourse(r.name)) practice += n;
+    }
+  log(`[career] practice alias tags removed: ${practice}`);
   if (inserted || deleted || tookOver) db.prepare('DELETE FROM course_skill_untagged WHERE course_id IN (SELECT course_id FROM course_skill)').run();
-  return { matched, inserted, took_over: tookOver, kept, rejected: rej, deleted, updated };
+  return { matched, inserted, took_over: tookOver, kept, rejected: rej, deleted, updated, practice_removed: practice };
 }
 
 interface CourseResult { tags: SkillTag[]; untagged: { is_core: boolean; reason: string } | null }
