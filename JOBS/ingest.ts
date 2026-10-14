@@ -16,6 +16,7 @@ import { MockProvider, llmConfigured, providerFromEnv } from '../lib/llm.js';
 import { isMain } from '../lib/main.js';
 import { EMBEDDED_CODE, SOFTWARE_CODE, classifyPosting, embeddedEvidence } from './occupations.js';
 import { tagPostings } from './skills.js';
+import { updateShortJdFlags } from './compare.js';
 import { computeSalaryStats } from './stats.js';
 import type { CleanPosting } from './types.js';
 
@@ -69,7 +70,8 @@ export function reclassifyAll(db: Database.Database) {
       upd.run(code, code ? c.confidence : null, mr, c.reason, rescan ? 1 : 0, r.id);
     }
   })();
-  return { total: rows.length, changed, reasons };
+  const short = updateShortJdFlags(db);
+  return { total: rows.length, changed, reasons, short };
 }
 
 /**
@@ -108,7 +110,7 @@ export async function ingest(sources: string[], opts: { retag?: boolean; force?:
       log(`[jobs] ${s}: upserted ${upsertPostings(db, postings)} postings`);
     }
     const rc = reclassifyAll(db);
-    log(`[jobs] reclassified ${rc.total} stored postings with current rules: ${rc.changed} changed; ${Object.entries(rc.reasons).map(([k, v]) => `${k} ${v}`).join(', ')}`);
+    log(`[jobs] reclassified ${rc.total} stored postings with current rules: ${rc.changed} changed; ${Object.entries(rc.reasons).map(([k, v]) => `${k} ${v}`).join(', ')}; JD < ${rc.short.min} chars (描述过短, not in skill demand): ${rc.short.flagged}`);
     const llm = opts.llm && llmConfigured() ? providerFromEnv(new MockProvider(() => '{"skills":[]}')) : null;
     if (opts.llm && !llm) log('[jobs] --llm given but LLM_* env not configured; LLM fallback skipped');
     await tagPostings(db, { all: opts.retag || opts.force, llm, log });

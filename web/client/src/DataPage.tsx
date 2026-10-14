@@ -3,7 +3,8 @@ import { api, type DatasetView, type QueryResult } from './api';
 
 const PAGE_SIZE = 20;
 
-function Cell({ v, format }: { v: unknown; format?: string }) {
+function Cell({ v, format, flagText }: { v: unknown; format?: string; flagText?: string }) {
+  if (format === 'boolean' && flagText) return v === 1 || v === true ? <span className="flag-warn">{flagText}</span> : <></>;
   if (v === null || v === undefined || v === '') return <span className="muted">—</span>;
   if (format === 'link' && typeof v === 'string')
     return <a href={v} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>打开 ↗</a>;
@@ -169,7 +170,7 @@ export function DataPage({ group }: { group?: string }) {
                       onClick={() => openDetail(row)}
                     >
                       {ds.listColumns.map((c) => (
-                        <td key={c.column} className={c.column === ds.titleColumn ? 'strong' : ''}><Cell v={row[c.column]} format={c.format} /></td>
+                        <td key={c.column} className={c.column === ds.titleColumn ? 'strong' : ''}><Cell v={row[c.column]} format={c.format} flagText={c.flagText} /></td>
                       ))}
                     </tr>
                   ))}

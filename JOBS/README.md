@@ -84,3 +84,16 @@ npm run jobs:ingest         # 同上，但先 upsert data/clean/jobs-upc.json
 **标题归一化**：匹配前去掉开头年份（2026、2027届）、结尾地名（-深圳、（深圳））和括号编号（(J10605)）。「C/C++」「Qt/C++」里的斜杠不算多岗位分隔。斜杠标题按第一个技术岗归（市场/数据分析师 → 数据分析）。交付/支持类（实施工程师、技术支持、交付经理）、芯片类、泛称（××暑期实习生、××管培生、技术类、实习生）不归类。
 
 **技能需求**：视图 `job_skill_demand`（后台「JOBS · 岗位技能需求」页），用全部年份的已归类岗位，每行带样本时间范围 `sample_from` / `sample_to`。
+
+## Batch 3 (expert 2026-10-14): product roles, 描述过短, skill-list comparison
+- **Product roles**: titles containing 产品经理 / 产品助理 / 产品运营 are unclassified (`classify_reason = 'product'`), e.g. 软件产品经理. A product-pm occupation may come later.
+- **描述过短** (migration 024, `job_posting.jd_too_short`): JD with whitespace removed shorter than `JOBS_MIN_JD_CHARS` (default 50) characters.
+  Recomputed on every `jobs:ingest` / `jobs:reclassify`. Left out of `job_skill_demand` and the comparison; still counted in `salary_stat`.
+  The 招聘岗位 data page shows a 描述过短 column/filter.
+- **Occupation skill list vs postings**: `npm run jobs:compare [-- --occupation=<code>] [--all] [--gap-high=20] [--core-low=5] [--min-pct=5]`
+  prints, per occupation, every listed skill (also at 0 hits) plus unlisted skills ≥ min-pct: postings mentioning it / eligible postings
+  (classified, not 描述过短, all years), share %, list status (核心 / 一般 / 未列入), and flags 高频未列入 (unlisted, ≥ `JOBS_GAP_HIGH`, default 20%)
+  and 核心低频 (core, < `JOBS_CORE_LOW`, default 5%). Admin console: 岗位技能需求 tab (`#/jobs/<code>`, API `GET /api/jobs/compare?occupation=`), sortable, flagged rows highlighted.
+  Both sides use `skill.id` (occupation_skill.skill_id and job_posting_skill.skill_id reference the same skill table).
+- **Which postings `--llm` sends**: classified or multi-role (`occupation_code IS NOT NULL OR multi_role = 1`), `jd_text` non-empty,
+  zero rows in job_posting_skill, `llm_attempted_at IS NULL` (with `--force`: every in-scope posting without an alias tag). No length filter.

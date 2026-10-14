@@ -365,3 +365,67 @@ test('salary labels: no 全国, source label, low-sample flag, 校招 row identi
   assert.ok(!views.includes('全国'));
   db.close();
 });
+
+test('product roles excluded (expert 2026-10-14, batch 3)', () => {
+  for (const t of ['软件产品经理', '产品经理', 'AI产品经理-北京', '产品助理', '产品运营实习生']) {
+    const c = classifyPosting(t);
+    assert.equal(c.code, null, t);
+    assert.equal(c.reason, 'product', t);
+  }
+  assert.equal(classifyPosting('Java开发工程师').reason, 'rule', 'unchanged');
+});
+
+test('jd_too_short flag (migration 024): set on reclassify, out of skill demand + comparison, still in salary_stat', async () => {
+  const { jdCleanLength, updateShortJdFlags, skillComparison, formatComparison } = await import('../compare.js');
+  assert.equal(jdCleanLength(' a b\n c　'), 3);
+  assert.equal(jdCleanLength(null), 0);
+  const db = db0();
+  db.exec('DELETE FROM job_posting_skill; DELETE FROM job_posting; DELETE FROM occupation_skill; DELETE FROM salary_stat;');
+  db.prepare(`INSERT OR IGNORE INTO occupation (code, level, level_name, name, edition, source_batch, source_url, updated_at) VALUES ('2-02-10-03', 4, '细类', '软件工程技术人员', '2022', 'test', 'u', '2026-10-14')`).run();
+  const long = '负责后台服务开发，熟悉Java和MySQL数据库，了解Linux常用命令，具备良好的沟通能力和团队协作精神，能吃苦耐劳。';
+  assert.ok(jdCleanLength(long) >= 50);
+  postingRow(db, 'l1', 'Java开发工程师', long);
+  postingRow(db, 'l2', 'Java开发工程师', long.replace('Java', 'Python'));
+  postingRow(db, 's1', 'Java开发工程师', '熟悉Java，计算机相关专业');
+  postingRow(db, 'pm', '软件产品经理', long);
+  db.exec(`UPDATE job_posting SET salary_min_month = 10000, salary_max_month = 12000, dedupe_key = id, published_at = '2026-10-01'`);
+  const rc = reclassifyAll(db);
+  assert.equal(rc.short.flagged, 1);
+  const flag = (id: string) => (db.prepare('SELECT jd_too_short f, occupation_code o FROM job_posting WHERE id = ?').get(id) as { f: number; o: string | null });
+  assert.equal(flag('s1').f, 1);
+  assert.equal(flag('l1').f, 0);
+  assert.equal(flag('pm').o, null, '软件产品经理 not 软件工程');
+  process.env.JOBS_MIN_JD_CHARS = '5';
+  assert.equal(updateShortJdFlags(db).flagged, 0, 'threshold configurable');
+  delete process.env.JOBS_MIN_JD_CHARS;
+  updateShortJdFlags(db);
+  await tagPostings(db, { log: () => {} });
+  const demand = db.prepare(`SELECT postings, occupation_postings FROM job_skill_demand WHERE occupation_code = '2-02-10-03' AND skill_id = 'software.java'`).get() as { postings: number; occupation_postings: number };
+  assert.deepEqual([demand.postings, demand.occupation_postings], [2, 2], 'short JD not in job_skill_demand');
+  const s = computeSalaryStats(db, { minSample: 1, log: () => {} });
+  const sal = db.prepare(`SELECT sample_size FROM salary_stat WHERE occupation_code = '2-02-10-03' AND city = '全部' AND channel = '全部' AND education = '全部' AND quarter LIKE '%-%'`).get() as { sample_size: number };
+  assert.ok(s.written > 0);
+  assert.equal(sal.sample_size, 3, 'short JD still counts for salary');
+
+  // comparison: listed skills even at 0, flags, same skill ids on both sides
+  const ins = db.prepare(`INSERT INTO occupation_skill (occupation_code, skill_id, importance, extraction_method) VALUES ('2-02-10-03', ?, ?, 'expert')`);
+  ins.run('software.java', 'core');
+  ins.run('software.testing', 'core');
+  ins.run('software.python', 'general');
+  const [o] = skillComparison(db, { occupation: '2-02-10-03' });
+  assert.ok(o);
+  assert.equal(o.eligible, 2);
+  assert.equal(o.too_short, 1);
+  assert.equal(o.sample_from, '2026-10-01');
+  const r = (id: string) => o.rows.find((x) => x.skill_id === id)!;
+  assert.deepEqual([r('software.java').postings, r('software.java').freq_pct, r('software.java').status, r('software.java').flag], [2, 100, 'core', '']);
+  assert.deepEqual([r('software.testing').postings, r('software.testing').flag], [0, '核心低频'], 'listed core skill with 0 hits is shown and flagged');
+  assert.equal(r('software.python').status, 'general');
+  const gap = r('software.db-sql');
+  assert.deepEqual([gap.status, gap.freq_pct, gap.flag], ['未列入', 100, '高频未列入']);
+  assert.equal(skillComparison(db, { occupation: '2-02-10-03', gapHigh: 101 })[0]!.rows.find((x) => x.skill_id === 'software.db-sql')!.flag, '', 'threshold configurable');
+  const txt = formatComparison([o]);
+  assert.match(txt, /样本：2 条/);
+  assert.match(txt, /核心低频/);
+  db.close();
+});

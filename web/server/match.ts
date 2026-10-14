@@ -11,6 +11,7 @@ import { CAREER_DB } from '../../CAREER/db.js';
 import { listOccupations, loadOccupationSkills, matchOccupation } from '../../CAREER/match.js';
 import { addAlias, applyAliasRules, deleteAlias, exportAliasesCsv, listAliases, loadSkillAliases } from '../../CAREER/aliases.js';
 import { HttpError } from './runs.js';
+import { skillComparison } from '../../JOBS/compare.js';
 
 const withDb = <T>(f: (db: Database.Database) => T): T => {
   if (!existsSync(CAREER_DB)) throw new HttpError(404, 'career.db not found (run career:all first)');
@@ -65,3 +66,7 @@ aliases.get('/export.csv', (c) => {
   c.header('Content-Disposition', 'attachment; filename="skill_aliases.csv"');
   return c.body(withDb((db) => exportAliasesCsv(db)), 200, { 'Content-Type': 'text/csv; charset=utf-8' });
 });
+
+/* ---------- 岗位技能需求: occupation skill list vs job postings (#/jobs) ---------- */
+export const jobs = new Hono();
+jobs.get('/compare', (c) => c.json(withDb((db) => skillComparison(db, { occupation: c.req.query('occupation') || undefined }))));

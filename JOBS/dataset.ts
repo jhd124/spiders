@@ -19,6 +19,7 @@ const postings = defineDataset({
     { key: 'channel', label: '渠道', column: 'channel', type: 'select' },
     { key: 'site', label: '来源', column: 'site', type: 'select' },
     { key: 'reason', label: '归类依据', column: 'classify_reason', type: 'select' },
+    { key: 'short', label: '描述过短', column: 'jd_too_short', type: 'boolean' },
   ],
   listColumns: [
     { column: 'title_raw', label: '职位' },
@@ -31,6 +32,7 @@ const postings = defineDataset({
     { column: 'occupation_code', label: '职业' },
     { column: 'multi_role', label: '多岗位' },
     { column: 'classify_reason', label: '归类依据' },
+    { column: 'jd_too_short', label: '描述', format: 'boolean', flagText: '描述过短' },
     { column: 'published_at', label: '发布', format: 'date' },
     { column: 'source_url', label: '来源', format: 'link' },
   ],
@@ -68,7 +70,7 @@ const salary = defineDataset({
 const demand = defineDataset({
   key: 'demand',
   title: 'JOBS · 岗位技能需求',
-  description: '每个职业的岗位里各技能出现的比例。用全部年份的岗位；样本时间范围见 sample_from / sample_to 列。',
+  description: '每个职业的岗位里各技能出现的比例。用全部年份的岗位；描述过短（JD 去空白后 < 50 字）的岗位不计入；与职业技能清单的对照见「岗位技能需求」页（#/jobs）。样本时间范围见 sample_from / sample_to 列。',
   kind: 'sqlite',
   dbPath: CAREER_DB,
   table: 'job_skill_demand',

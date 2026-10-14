@@ -65,3 +65,6 @@ button.danger { background: var(--bad); border-color: var(--bad); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { background: #eef2f8; border-radius: 10px; padding: 1px 8px; font-size: 12px; }
 code { font-size: 12px; }
+.flag-warn { color: #b3261e; background: #fdecea; border-radius: 4px; padding: 1px 6px; font-size: 12px; white-space: nowrap; }
+tr.flag-row td { background: #fff4d6; }
+th.sortable { cursor: pointer; user-select: none; }

@@ -22,6 +22,8 @@ export interface ColumnDef {
   label: string;
   /** how the UI renders it */
   format?: 'text' | 'link' | 'boolean' | 'list' | 'number' | 'date';
+  /** boolean only: show this text for 1/true and nothing for 0/false (e.g. '描述过短') */
+  flagText?: string;
 }
 
 /**

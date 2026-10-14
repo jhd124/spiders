@@ -15,6 +15,8 @@ export interface OccupationRule {
 const NOT_TECH = /非技术|新媒体|品牌|宣传|招聘启事|售前|客服|招商|行政|人事|财务|会计|商务|市场专员|司机|普工|操作工|(?<!网络|信息|数据)安全员|安全生产|安环|EHS|HSE|保安/i;
 /** expert exclusion words (2026-10-14): never a pilot occupation */
 const EXCLUDE_WORDS = /销售|教师|顾问|营销/;
+/** product roles (expert 2026-10-14): not 软件工程; a future product-pm occupation */
+const PRODUCT = /产品经理|产品助理|产品运营/;
 const TECH_WORD = /技术|研发|开发|软件|算法|数据|IT|工程|信息|网络|计算机|智能|程序|测试|运维|硬件/i;
 /** 管培 without a tech word -> excluded */
 const MGMT_TRAINEE = /管培|管理培训生/;
@@ -82,7 +84,7 @@ export interface Classification {
   confidence: number | null;
   /** several roles listed in one title: unclassified, never in salary stats, skills still extracted */
   multiRole: boolean;
-  /** why it is (un)classified: 'rule' | 'first_role' | 'multi_role' | 'generic' | 'excluded_word' | 'mgmt_trainee' | 'design' | 'not_tech' | 'no_match' | 'support' | 'chip' | 'cpp' (C/C++ -> software) | 'cpp_embedded' (C/C++ moved to 嵌入式 by JD) */
+  /** why it is (un)classified: 'rule' | 'first_role' | 'multi_role' | 'generic' | 'excluded_word' | 'mgmt_trainee' | 'design' | 'not_tech' | 'no_match' | 'support' | 'product' | 'chip' | 'cpp' (C/C++ -> software) | 'cpp_embedded' (C/C++ moved to 嵌入式 by JD) */
   reason: string;
 }
 
@@ -125,7 +127,7 @@ export function normalizeTitle(title: string): string {
   return y.length ? y : t;
 }
 
-/** title -> occupation + flags. Order: normalize, multi-role, generic, support, chip, exclusion words, 管培, design, then rules (first TECH alternative for 'a / b'). */
+/** title -> occupation + flags. Order: normalize, multi-role, generic, product, support, chip, exclusion words, 管培, design, then rules (first TECH alternative for 'a / b'). */
 export function classifyPosting(title: string): Classification {
   // 'C/C++', 'Qt/C++' are one skill, not two roles: protect the slash before splitting
   const t = normalizeTitle(title).replace(/(?<![A-Za-z])(?:C|QT|Qt|qt)\s*[\/／]\s*C\+\+/g, 'C++');
@@ -134,6 +136,7 @@ export function classifyPosting(title: string): Classification {
   const items = c.replace(/[…]+|\.{3,}|等$/g, '').split(ROLE_SEP).filter((x) => x.length > 0);
   if (items.length >= MULTI_ROLE_MIN) return none('multi_role', true);
   if (GENERIC.test(c) || GENERIC_EXACT.test(c)) return none('generic');
+  if (PRODUCT.test(c)) return none('product');
   if (SUPPORT.test(c)) return none('support');
   if (CHIP.test(c)) return none('chip');
   if (EXCLUDE_WORDS.test(c)) return none('excluded_word');
