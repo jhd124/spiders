@@ -3,3 +3,7 @@ school,major_code,table_block,course_type,verified_by,note
 哈尔滨工业大学（威海）,080717T,专业方向选修课表二,任选,国内教育行业专家,2026-10-13: broad list stays 任选 even though the text also says 选择4学分
 哈尔滨工业大学（威海）,080901,专业方向选修课表一,限选,国内教育行业专家,2026-10-13: same structure as 080717T
 哈尔滨工业大学（威海）,080901,专业方向选修课表二,任选,国内教育行业专家,2026-10-13: same structure as 080717T
+哈尔滨工业大学（威海）,080801,大类专业基础限选课程(按模块选修),限选,国内教育行业专家,2026-10-14 batch 2: module choice = 限选
+哈尔滨工业大学（威海）,080801,专业方向选修课程（含研究生课程）,任选,国内教育行业专家,2026-10-14 batch 2: one wide list, choose 4.5 credits = 任选
+哈尔滨工业大学（威海）,080701,大类专业基础限选课程(按模块选修),限选,国内教育行业专家,2026-10-14 batch 2: module choice = 限选
+哈尔滨工业大学（威海）,080701,专业方向选修课程（含研究生课程）,任选,国内教育行业专家,2026-10-14 batch 2: one wide list, choose 6.5 credits = 任选

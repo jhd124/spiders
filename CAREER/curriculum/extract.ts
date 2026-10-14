@@ -130,7 +130,7 @@ export const impliedType = (block: string): CourseType | null => {
  *  ("本专业必修核心课程包括…", "专业核心课程：") and a trailing 等 removed */
 export function coreSectionNames(text: string): string[] {
   const body = text.split('\n').slice(1).join('');
-  return norm(body).split(/[、，,；;。]/).map((t) => t.replace(/^.*(包括|包含|核心课程[:：]|主干课程[:：]|[:：])/, '').replace(/等$/, '')).map(normCourseName).filter((t) => t.length >= 2);
+  return norm(body).split(/[、，,；;。]/).map((t) => t.replace(/^.*(包括|包含|核心课程[:：]|主干课程[:：]|[:：])/, '').replace(/等(核心|主干)?(必修)?(课程|课)?$|等$/, '')).map(normCourseName).filter((t) => t.length >= 2);
 }
 /** a table course whose name extends a core name by a short qualifier ("编译原理" -> "编译原理与技术"); never a different course
  *  such as 课程设计/实验/实践/实习/导读 or a longer name ("数据库系统" -> "数据库系统及安全" is NOT matched: 3+ chars) */
@@ -139,6 +139,10 @@ export const coreNameExtends = (table: string, core: string) => {
   const rest = table.slice(core.length);
   return rest.length <= 3 && /^(与技术|技术|及应用|与应用|原理|基础|概论|导论)$/.test(rest);
 };
+
+/** "自动控制理论(1)", "电路（II）", "电机学(I)" are numbered parts of "自动控制理论" / "电路" / "电机学" */
+export const isNumberedPart = (table: string, core: string) =>
+  table.startsWith(core) && /^-[A-H]$|^[（(]\s*([0-9]{1,2}|[IVX]{1,4}|[ⅠⅡⅢⅣ]|[一二三四]|[上下])\s*[）)]$/.test(table.slice(core.length));
 
 export interface ExtractionResult {
   model: string;
@@ -225,12 +229,23 @@ export async function extractCourses(
   // a table course is never core because its name is a substring of the section text (old false positives).
   const coreSet = new Set([...sectionNames, ...(coreRaw ? coreSectionNames(coreRaw) : [])]);
   if (coreText) for (const [k, c] of best) c.core_in_section = coreSet.has(k);
+  // a section name with no row of that exact name marks its numbered parts (自动控制理论 -> 自动控制理论(1)/(2), 专业设计 -> 专业设计-A…D)
+  if (coreText) for (const k of coreSet) if (!best.has(k)) for (const [tk, t] of best) if (isNumberedPart(tk, k)) t.core_in_section = true;
   // a core-section-only entry (no table row under that exact name) merges into the one table row that extends its name
   for (const [k, c] of [...best]) {
     if (!c.core_in_section || c.block !== null || c.credits !== null) continue;
     const ext = [...best.entries()].filter(([tk, t]) => t.block !== null && coreNameExtends(tk, k));
     if (ext.length !== 1) continue;
     ext[0]![1].core_in_section = true;
+    best.delete(k);
+  }
+  // a core name listed once for a numbered sequence (HIT-WH 自动控制理论 -> 自动控制理论(1) + 自动控制理论(2); SDU 电路 -> 电路（I）/（II）)
+  // marks every part as core and the bare section entry is dropped
+  for (const [k, c] of [...best]) {
+    if (!c.core_in_section || c.block !== null || c.credits !== null) continue;
+    const parts = [...best.entries()].filter(([tk, t]) => (t.block !== null || t.credits !== null) && isNumberedPart(tk, k));
+    if (!parts.length) continue;
+    for (const [, t] of parts) t.core_in_section = true;
     best.delete(k);
   }
   res.courses = [...best.values()];

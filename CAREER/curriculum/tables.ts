@@ -43,7 +43,9 @@ export function findCoreSection(pages: PageText[]): { page: number; text: string
   if (i < 0) i = ls.findIndex((l) => CORE_HEADING.test(l.text) && !/^\s*[一二三四五六七八九十]+、\s*主干学科\s*$/.test(l.text));
   if (i < 0) return null;
   const body: string[] = [];
-  for (let j = i + 1; j < ls.length && !HEADING.test(ls[j]!.text) && body.length < 40; j++) body.push(ls[j]!.text);
+  // page furniture inside the section (UPC: "· 547 ·" + running head "中国石油大学（华东）2025培养方案") is skipped
+  const furniture = (t: string) => /^\s*·\s*\d+\s*·\s*$|^\s*\d{1,3}\s*$|培养方案\s*$/.test(t);
+  for (let j = i + 1; j < ls.length && !HEADING.test(ls[j]!.text) && body.length < 40; j++) if (!furniture(ls[j]!.text)) body.push(ls[j]!.text);
   const labeled = body.filter((l) => SUB_LABEL.test(l) && /课程|学科|课/.test(l.match(SUB_LABEL)![1]!));
   let kept = body;
   if (labeled.length && labeled.some((l) => /核心/.test(l.match(SUB_LABEL)![1]!))) {
