@@ -113,8 +113,9 @@ export const aliasNorm = (s: string) => s.replace(/\s+/g, '').replace(/[（(][^�
 /** exact-match form: whole name, spaces dropped, full/half-width brackets unified, bracket suffix kept (电路（I） ≠ 电路（II）) */
 export const exactNorm = (s: string) => s.replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').toLowerCase();
 export type AliasMatch = 'contains' | 'exact';
-/** practice courses (expert 2026-10-14) are never alias-tagged: 电路分析实验, 电子技术课程设计, 自动控制实践(1) */
-export const isPracticeCourse = (name: string) => /(课程设计|实验|实习|实训|实践)$/.test(aliasNorm(name));
+/** practice courses (expert 2026-10-14) are never alias-tagged and (2026-10-15) never count toward coverage: 电路分析实验,
+ *  电子技术课程设计, 自动控制实践(1), 计算机视觉实践. Not practice (2026-10-15): the suffix right after 与 — 大模型基础与实践, X原理与实践. */
+export const isPracticeCourse = (name: string) => /(?<!与)(课程设计|实验|实习|实训|实践)$/.test(aliasNorm(name));
 export const aliasHits = (alias: string, match: AliasMatch | string | null | undefined, course: string) =>
   !isPracticeCourse(course) && (match === 'exact' ? exactNorm(course) === exactNorm(alias) : aliasNorm(alias).length >= 2 && aliasNorm(course).includes(aliasNorm(alias)));
 

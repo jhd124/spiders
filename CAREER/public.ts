@@ -2,7 +2,7 @@
  * Student-facing read-only views (/api/public/*, pages /s/). Scoring is CAREER/match.ts matchOccupation (not duplicated here);
  * this module only selects the student fields: no evidence quotes, review flags, weights, verifiers or admin notes.
  * Only courses with a non-needs_review tag are shown; practice courses (课程设计/实验/实习/实训/实践, expert 2026-10-15) are hidden
- *  from students whatever the tag source (admin keeps them; scoring is unchanged). "covered" for a core skill = taught by a 必修/限选 course (match.ts rule).
+ *  from students whatever the tag source (admin keeps them); match.ts never counts them toward coverage. "covered" for a core skill = taught by a 必修/限选 course (match.ts rule).
  */
 import type Database from 'better-sqlite3';
 import { matchOccupation, type MajorMatch } from './match.js';
@@ -78,13 +78,15 @@ export function publicMajorForOccupation(db: Database.Database, code: string, sc
       .sort((a, b) => ['必修', '限选', '任选'].indexOf(a.type) - ['必修', '限选', '任选'].indexOf(b.type));
   };
   const core = mm.skills.filter((s) => s.importance === 'core');
+  /** the skill shows up only in practice courses (not counted): the page says so, without negative wording */
+  const inPractice = (s: MajorMatch['skills'][number]) => s.courses.some((c) => !c.needs_review && c.practice);
   return {
     occupation: { code, display_name: d.display_name, official_name: d.official_name },
     school_id: mm.school_id, school: mm.school, major_code: mm.major_code, major: mm.major ?? mm.major_code,
     core_covered: mm.core_covered, core_total: mm.core_total, label: label(mm.core_covered, mm.core_total),
     sentence: `必修和限选课教到了 ${mm.core_total} 项核心能力中的 ${mm.core_covered} 项`,
     covered: core.filter((s) => s.covered).map((s) => ({ skill: s.skill, courses: courses(s) })),
-    to_supplement: core.filter((s) => !s.covered).map((s) => ({ skill: s.skill, courses: courses(s) })),
+    to_supplement: core.filter((s) => !s.covered).map((s) => ({ skill: s.skill, courses: courses(s), in_practice: inPractice(s) })),
     general: mm.skills.filter((s) => s.importance !== 'core').map((s) => ({ skill: s.skill, covered: s.covered, courses: courses(s) })),
   };
 }

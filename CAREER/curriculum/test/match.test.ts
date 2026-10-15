@@ -30,7 +30,7 @@ function setup() {
   course('a', '080717T', '深度学习', 1, [['ai.dl', '原文明确']]);
   course('a', '080901', '操作系统', 1, [['software.os', '核心课名']]);
   course('a', '080901', '人工智能导论', 0, [['ai.ml', '课名推断']]);
-  course('a', '080901', 'Linux实践', 0, [['software.linux', '原文明确']]);           // general only: must not outrank core
+  course('a', '080901', 'Linux系统', 0, [['software.linux', '原文明确']]);           // general only: must not outrank core
   course('b', '080901', '模式识别', 0, [['ai.ml', '原文明确', 1], ['ai.cv', '原文明确']]); // flagged tag: listed, not scored
   return db;
 }
@@ -191,6 +191,8 @@ test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice
   assert.equal(aliasHits('电路（I）', 'exact', '电路（II）'), false, 'bracket suffix kept in exact mode');
   for (const n of ['电路分析实验', '电子技术课程设计', '自动控制实践(1)', '生产实习', '金工实训']) assert.equal(isPracticeCourse(n), true, n);
   assert.equal(isPracticeCourse('实验设计方法'), false);
+  for (const n of ['大模型基础与实践', '电路原理与实验', '模拟电子技术与实践（1）']) assert.equal(isPracticeCourse(n), false, `${n}: 与 + suffix is a normal course (2026-10-15)`);
+  assert.equal(isPracticeCourse('计算机视觉实践'), true);
   assert.equal(aliasHits('电路分析', 'contains', '电路分析实验'), false);
   const db = new Database(process.env.CAREER_DB!);
   db.pragma('foreign_keys = OFF');
@@ -198,7 +200,7 @@ test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice
     db.prepare("INSERT INTO course (id, school_id, name, source_url, extraction_method) VALUES (?, 'x', ?, 'u', 'llm')").run(id, name);
     db.prepare("INSERT INTO major_course (school_id, major_code, course_id, source_url, extraction_method, course_type, is_core) VALUES ('x', '080601', ?, 'u', 'llm', '必修', 0)").run(id);
   };
-  course('x:dz', '电子技术'); course('x:dl', '电力电子技术'); course('x:sy', '电路分析实验'); course('x:c1', '电路（I）'); course('x:gj', '高级语言程序设计'); course('x:jc', '集成电路设计');
+  course('x:dz', '电子技术'); course('x:dl', '电力电子技术'); course('x:sy', '电路分析实验'); course('x:c1', '电路（I）'); course('x:gj', '高级语言程序设计'); course('x:jc', '集成电路设计'); course('x:yu', '模拟电子技术与实践');
   // a stale alias tag on a practice course (pre-027) and an LLM tag on it: the alias one goes, the LLM one stays
   db.prepare("INSERT INTO course_skill (course_id, skill_id, weight, extraction_method, reviewed, source, evidence_type) VALUES ('x:sy', 'electrical.circuits', 0.5, 'pdf_parse', 0, 'rule:alias', '课名推断'), ('x:sy', 'hardware.analog', 0.5, 'llm', 0, 'llm', '课名推断')").run();
   course('x:dd', '电路与电子技术基础'); course('x:ddy', '电路与电子技术基础实验'); course('x:xl', '电子线路（1）'); course('x:cc', '程序设计（C/C++）'); course('x:zc', '计算机组成与系统结构');
@@ -216,6 +218,7 @@ test('expert 2026-10-14: exact-match aliases (one alias -> two skills), practice
   assert.deepEqual(sk('x:c1'), ['电路原理']);
   assert.deepEqual(sk('x:gj'), [], '高级语言程序设计 is not C/C++');
   assert.deepEqual(sk('x:jc'), []);
+  assert.deepEqual(sk('x:yu'), ['模拟电路'], '与-course: alias matching applies again');
   assert.deepEqual(sk('x:dd'), ['模拟电路', '电路原理']);
   assert.deepEqual(sk('x:ddy'), []);
   assert.deepEqual(sk('x:xl'), ['模拟电路']);

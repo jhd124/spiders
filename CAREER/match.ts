@@ -5,6 +5,7 @@
  * Scoring per school x major:
  *   for each required skill s: best(s) = max course_skill.weight (原文明确 1.0 / 核心课名 0.8 / 课名推断 0.5) over the major's
  *   courses tagged with s, ignoring tags with needs_review = 1 (listed, flagged) and courses whose review was rejected.
+ * Practice courses (curriculum/tag.ts isPracticeCourse) are listed with practice = true and never scored (expert 2026-10-15).
  * Ranking (expert 2026-10-14, coverage counting; 2026-10-15: equal ratio -> more covered core skills first): core_coverage = core skills covered by ≥1 必修/限选 course with a non-needs_review
  *   tag (any evidence tier) / core skills; general_coverage = same over general skills, 任选 courses included. Evidence weights no
  *   longer score; the weighted sums below are kept only as tie-breaks (core_coverage, general_coverage, core_score, general_score).
@@ -22,6 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type Database from 'better-sqlite3';
 import { parseCsv } from '../lib/csv.js';
+import { isPracticeCourse } from './curriculum/tag.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const OCC_SKILLS_CSV = join(HERE, 'seeds', 'occupation_skills.csv');
@@ -71,7 +73,7 @@ export function listOccupations(db: Database.Database): OccupationListItem[] {
     FROM occupation_skill os JOIN occupation o ON o.code = os.occupation_code GROUP BY o.code ORDER BY o.code`).all() as OccupationListItem[];
 }
 
-export interface CourseEvidence { course_id: string; course: string; is_core: boolean; course_type: string | null; evidence_type: string | null; weight: number; quote: string | null; needs_review: boolean; review_reason: string | null }
+export interface CourseEvidence { course_id: string; course: string; practice: boolean; is_core: boolean; course_type: string | null; evidence_type: string | null; weight: number; quote: string | null; needs_review: boolean; review_reason: string | null }
 export interface SkillMatch { skill_id: string; skill: string; importance: Importance; best: number; best_required: number; covered: boolean; elective_only: boolean; best_course: string | null; courses: CourseEvidence[] }
 export interface MajorMatch {
   school_id: string; school: string; major_code: string; major: string | null;
@@ -111,11 +113,12 @@ export function matchOccupation(db: Database.Database, code: string): Occupation
     let core = 0, gen = 0, flagged = 0, coreBest = 0;
     const sm: SkillMatch[] = skills.map((s) => {
       const courses: CourseEvidence[] = mine.filter((e) => e.skill_id === s.skill_id).map((e) => ({
-        course_id: e.course_id, course: e.course, is_core: e.is_core === 1, course_type: e.course_type, evidence_type: e.evidence_type,
+        course_id: e.course_id, course: e.course, practice: isPracticeCourse(e.course), is_core: e.is_core === 1, course_type: e.course_type, evidence_type: e.evidence_type,
         weight: e.weight ?? EVIDENCE_WEIGHT[e.evidence_type ?? ''] ?? 0, quote: e.quote, needs_review: e.needs_review === 1, review_reason: e.review_reason,
       })).sort((a, b) => Number(a.needs_review) - Number(b.needs_review) || b.weight - a.weight || Number(b.is_core) - Number(a.is_core) || a.course.localeCompare(b.course));
       flagged += courses.filter((c) => c.needs_review).length;
-      const ok = courses.filter((c) => !c.needs_review);
+      // practice courses (课程设计/实验/实习/实训/实践, expert 2026-10-15) are listed but never count toward any coverage or score
+      const ok = courses.filter((c) => !c.needs_review && !c.practice);
       const req = ok.filter((c) => c.course_type === '必修' || c.course_type === '限选');
       const best = ok[0]?.weight ?? 0, bestReq = req[0]?.weight ?? 0;
       const isCore = s.importance === 'core';

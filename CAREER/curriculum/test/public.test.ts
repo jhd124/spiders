@@ -28,7 +28,8 @@ migrate(process.env.CAREER_DB!, () => {});
   course('机器学习', '必修', 'ai.ml');
   course('深度学习（选修）', '任选', 'ai.dl');
   course('计算机视觉', '限选', 'ai.cv', 1); // flagged: never shown to students
-  course('机器学习课程设计', '必修', 'ai.ml'); // practice course: LLM/alias tag kept for admin + scoring, hidden from students
+  course('机器学习课程设计', '必修', 'ai.ml'); // practice course: tag kept for admin, hidden from students, never scored
+  course('深度学习实践', '必修', 'ai.dl'); // practice-only core skill: NOT covered (2026-10-15)
   db.prepare("UPDATE course_skill SET extraction_method = 'llm', source = 'llm' WHERE course_id = 'a:机器学习课程设计'").run();
   db.prepare(`INSERT INTO occupation_skill (occupation_code, skill_id, importance, source, verified_by, note, extraction_method, reviewed) VALUES
     ('2-02-38-01', 'ai.ml', 'core', 'expert', 'SECRET VERIFIER', 'SECRET NOTE', 'expert', 1), ('2-02-38-01', 'ai.dl', 'core', 'expert', 'SECRET VERIFIER', NULL, 'expert', 1),
@@ -79,19 +80,23 @@ test('major-for-occupation detail: sentence, badges, uncovered skills to supplem
   const { body, text } = await get(`/occupation/2-02-38-01/major/${encodeURIComponent('name:甲大学')}/080717T`);
   assert.equal(body.sentence, '必修和限选课教到了 2 项核心能力中的 1 项');
   assert.deepEqual(body.covered, [{ skill: '机器学习', courses: [{ course: '机器学习', type: '必修' }] }]);
-  assert.deepEqual(body.to_supplement, [{ skill: '深度学习', courses: [{ course: '深度学习（选修）', type: '任选' }] }]);
+  assert.deepEqual(body.to_supplement, [{ skill: '深度学习', courses: [{ course: '深度学习（选修）', type: '任选' }], in_practice: true }]);
   assert.deepEqual(body.general, [{ skill: '计算机视觉', covered: false, courses: [] }], 'needs_review course not shown');
   assert.doesNotMatch(text, /SECRET|缺失|needs_review|课程设计/);
 });
 
-test('practice-course tags: hidden from students, still in the admin match (scoring unchanged)', async () => {
+test('practice-course tags: hidden from students, listed (practice) but never scored in the admin match', async () => {
   const { matchOccupation } = await import('../../match.js');
   const db = new Database(process.env.CAREER_DB!, { readonly: true });
   const mm = matchOccupation(db, '2-02-38-01')!.majors[0]!;
-  assert.ok(mm.skills.find((x) => x.skill === '机器学习')!.courses.some((c) => c.course === '机器学习课程设计'), 'admin keeps it');
+  assert.ok(mm.skills.find((x) => x.skill === '机器学习')!.courses.some((c) => c.course === '机器学习课程设计' && c.practice), 'admin keeps it');
+  const dl = mm.skills.find((x) => x.skill === '深度学习')!;
+  assert.equal(dl.covered, false, 'a 必修 practice course does not cover a core skill');
+  assert.equal(dl.best_required, 0);
+  assert.equal(mm.core_covered, 1);
   db.close();
   const { text } = await get('/occupation/2-02-38-01');
-  assert.doesNotMatch(text, /课程设计/);
+  assert.doesNotMatch(text, /课程设计|深度学习实践/);
 });
 
 test('reverse: major page ranks occupations by core coverage', async () => {

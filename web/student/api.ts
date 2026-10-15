@@ -6,7 +6,7 @@ export interface OccDetail { code: string; display_name: string; official_name: 
   demand: { postings: number; skills: { skill: string; pct: number; listed: boolean }[] }; majors: MajorRow[] }
 export interface CourseRef { course: string; type: '必修' | '限选' | '任选' }
 export interface MajorForOcc { occupation: { code: string; display_name: string; official_name: string }; school_id: string; school: string; major_code: string; major: string;
-  core_covered: number; core_total: number; label: string; sentence: string; covered: { skill: string; courses: CourseRef[] }[]; to_supplement: { skill: string; courses: CourseRef[] }[];
+  core_covered: number; core_total: number; label: string; sentence: string; covered: { skill: string; courses: CourseRef[] }[]; to_supplement: { skill: string; courses: CourseRef[]; in_practice: boolean }[];
   general: { skill: string; covered: boolean; courses: CourseRef[] }[] }
 export interface MajorItem { school_id: string; school: string; major_code: string; major: string }
 export interface MajorDetail extends MajorItem { not_covered: string[]; occupations: { code: string; display_name: string; official_name: string; core_covered: number; core_total: number; label: string }[] }

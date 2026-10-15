@@ -176,13 +176,15 @@ function MajorForOccPage({ code, school, major }: { code: string; school: string
           <h1>{d.school} · {d.major}</h1>
           <p className="official">对照职业：{d.occupation.display_name}（{d.occupation.official_name}）</p>
           <p className="sentence">{d.sentence}</p>
-          {d.covered.map((x) => <div key={x.skill} className="skill"><h3>✓ {x.skill}</h3>{x.courses.length ? <Courses list={x.courses} /> : <p className="muted small">在课程设计、实验等实践环节中涉及</p>}</div>)}
+          {d.covered.map((x) => <div key={x.skill} className="skill"><h3>✓ {x.skill}</h3><Courses list={x.courses} /></div>)}
           {d.to_supplement.length > 0 && (
             <>
               <h2>这些需要靠选修或自学补上</h2>
               {d.to_supplement.map((x) => (
                 <div key={x.skill} className="skill sup"><h3>{x.skill}</h3>
-                  {x.courses.length ? <Courses list={x.courses} /> : <p className="muted small">培养方案里没有找到对应课程</p>}</div>))}
+                  {x.courses.length > 0 && <Courses list={x.courses} />}
+                  {x.in_practice && <p className="muted small">在课程设计、实验等实践环节中涉及</p>}
+                  {!x.courses.length && !x.in_practice && <p className="muted small">培养方案里没有找到对应课程</p>}</div>))}
             </>)}
           <p><a href={href.major(d.school_id, d.major_code)}>这个专业还能做什么 ›</a></p>
         </>)}
