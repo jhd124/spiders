@@ -114,7 +114,7 @@ function OccPage({ code }: { code: string }) {
           <p className="lbl">一般能力</p>
           <div className="pills">{d.general_skills.map((x) => <span key={x} className="pill">{x}</span>)}</div>
 
-          <h2>薪资（按学历要求，月薪）</h2>
+          <h2>校招起薪（按学历要求，月薪）</h2>
           {d.salary.length ? (
             <>
               <table className="sal"><thead><tr><th>学历</th><th>样本</th><th>P25</th><th>中位数</th><th>P75</th></tr></thead>
@@ -136,8 +136,9 @@ function OccPage({ code }: { code: string }) {
               <p className="src">基于 {d.demand.postings} 条招聘信息</p>
             </>) : <p className="muted">暂时没有足够的招聘信息。</p>}
 
-          <h2>哪些专业的课程更对口</h2>
-          <p className="muted small">按必修和限选课覆盖的核心能力数排序</p>
+          <h2>哪些专业的课程覆盖得更全</h2>
+          <p className="muted small">按必修和限选课覆盖核心能力的比例排序</p>
+          <Legend first={d.majors[0]} />
           <MajorList code={d.code} majors={d.majors} />
         </>)}
       </Loaded>
@@ -175,7 +176,7 @@ function MajorForOccPage({ code, school, major }: { code: string; school: string
           <h1>{d.school} · {d.major}</h1>
           <p className="official">对照职业：{d.occupation.display_name}（{d.occupation.official_name}）</p>
           <p className="sentence">{d.sentence}</p>
-          {d.covered.map((x) => <div key={x.skill} className="skill"><h3>✓ {x.skill}</h3><Courses list={x.courses} /></div>)}
+          {d.covered.map((x) => <div key={x.skill} className="skill"><h3>✓ {x.skill}</h3>{x.courses.length ? <Courses list={x.courses} /> : <p className="muted small">在课程设计、实验等实践环节中涉及</p>}</div>)}
           {d.to_supplement.length > 0 && (
             <>
               <h2>这些需要靠选修或自学补上</h2>
@@ -200,14 +201,20 @@ function MajorPage({ school, major }: { school: string; major: string }) {
           <h1>{d.school} · {d.major}</h1>
           <p className="official">专业代码 {d.major_code}</p>
           <h2>这个专业能做什么</h2>
-          <p className="muted small">按必修和限选课覆盖的核心能力数排序</p>
+          <p className="muted small">按必修和限选课覆盖核心能力的比例排序</p>
+          <Legend first={d.occupations[0]} />
           <ul className="cards">{d.occupations.map((o) => (
             <li key={o.code}><a href={href.majorForOcc(o.code, d.school_id, d.major_code)}>
               <b>{o.display_name}</b><small>{o.official_name}</small><span className="score">{o.label}</span>
             </a></li>))}
           </ul>
+          {d.not_covered.length > 0 && <p className="muted small fold">课程基本不涉及：{d.not_covered.join('、')}</p>}
         </>)}
       </Loaded>
     </>
   );
 }
+
+/** first appearance of 核心能力 n/m: explain with the first row's numbers */
+const Legend = ({ first }: { first?: { core_covered: number; core_total: number } }) =>
+  first ? <p className="muted small legend">{first.core_covered}/{first.core_total} 表示 {first.core_total} 项核心能力里，必修和限选课教到了 {first.core_covered} 项</p> : null;

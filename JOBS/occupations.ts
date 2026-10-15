@@ -1,5 +1,5 @@
 /**
- * The 8 pilot occupations (codes from CAREER/seeds/occupation_skills.csv): crawl keywords and the title rules that
+ * The 11 pilot occupations (8 IT + 3 EE/automation, 2026-10-15) (codes from CAREER/seeds/occupation_skills.csv): crawl keywords and the title rules that
  * assign a posting to one 细类. Rules are checked in ORDER (most specific first); the first match wins.
  * Deterministic and reviewable — edit here, re-run `npm run jobs:ingest` to re-classify stored postings.
  */
@@ -39,8 +39,26 @@ export const OCCUPATION_RULES: OccupationRule[] = [
   },
   {
     code: '2-02-10-06', name: '嵌入式系统设计工程技术人员',
-    keywords: ['嵌入式', '单片机', '固件'],
+    keywords: ['嵌入式', '单片机', '固件', '硬件工程师'],
     include: /嵌入式|单片机|STM32|硬件工程师|硬件开发|MCU|固件|驱动开发|底层软件|(?<![A-Za-z])BSP(?![A-Za-z])|FPGA|Linux驱动|RTOS/,
+  },
+  // EE / automation (expert 2026-10-15). 硬件工程师 / 硬件开发 stay 嵌入式 (rule above); 硬件测试 -> 电子仪器与电子测量.
+  {
+    code: '2-02-07-07', name: '自动控制工程技术人员',
+    keywords: ['自动化工程师', '电气自动化', 'PLC'],
+    include: /电气自动化|自动化工程|自动化工程师|自动控制|控制工程师|控制系统工程|PLC|DCS|过程控制|仪控|自控/i,
+    exclude: /自动化测试|测试自动化|办公自动化|营销自动化|流程自动化|RPA/i,
+  },
+  {
+    code: '2-02-11-01', name: '电工电器工程技术人员',
+    keywords: ['电气工程师', '电力'],
+    include: /电气|电力|供配电|配电|变电|输电|电网|继电保护|电机工程|电机设计|电机研发|电力电子|高压|新能源发电|光伏电站|储能电站/,
+    exclude: /电力销售|电力营销|抄表/,
+  },
+  {
+    code: '2-02-09-04', name: '电子仪器与电子测量工程技术人员',
+    keywords: ['电子工程师', '硬件测试'],
+    include: /电子工程师|电子工程|硬件测试|测试工程师[（(]硬件|电子测量|测试测量|仪器仪表|仪表工程|电子技术|电子设计|电路设计|射频工程|射频测试|EMC|电磁兼容/i,
   },
   {
     code: '2-02-38-01', name: '人工智能工程技术人员',

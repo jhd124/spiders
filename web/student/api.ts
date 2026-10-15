@@ -9,7 +9,7 @@ export interface MajorForOcc { occupation: { code: string; display_name: string;
   core_covered: number; core_total: number; label: string; sentence: string; covered: { skill: string; courses: CourseRef[] }[]; to_supplement: { skill: string; courses: CourseRef[] }[];
   general: { skill: string; covered: boolean; courses: CourseRef[] }[] }
 export interface MajorItem { school_id: string; school: string; major_code: string; major: string }
-export interface MajorDetail extends MajorItem { occupations: { code: string; display_name: string; official_name: string; core_covered: number; core_total: number; label: string }[] }
+export interface MajorDetail extends MajorItem { not_covered: string[]; occupations: { code: string; display_name: string; official_name: string; core_covered: number; core_total: number; label: string }[] }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`/api/public${path}`);

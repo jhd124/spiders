@@ -17,7 +17,7 @@ migrate(process.env.CAREER_DB!, () => {});
 {
   const db = new Database(process.env.CAREER_DB!);
   db.pragma('foreign_keys = OFF');
-  db.prepare(`INSERT INTO occupation (code, level, level_name, name, edition, source_batch, source_url, updated_at) VALUES ('2-02-38-01', 4, '细类', '人工智能工程技术人员', '2022', '大典2022', 'u', 'x'), ('2-02-10-03', 4, '细类', '别的名字', '2022', '大典2022', 'u', 'x')`).run();
+  db.prepare(`INSERT INTO occupation (code, level, level_name, name, edition, source_batch, source_url, updated_at) VALUES ('2-02-38-01', 4, '细类', '人工智能工程技术人员', '2022', '大典2022', 'u', 'x'), ('2-02-10-03', 4, '细类', '别的名字', '2022', '大典2022', 'u', 'x'), ('2-02-38-03', 4, '细类', '大数据工程技术人员', '2022', '大典2022', 'u', 'x')`).run();
   db.prepare(`INSERT INTO school (id, name, source) VALUES ('name:甲大学', '甲大学', 't')`).run();
   const course = (name: string, type: string | null, skill: string, nr = 0) => {
     const id = `a:${name}`;
@@ -28,9 +28,15 @@ migrate(process.env.CAREER_DB!, () => {});
   course('机器学习', '必修', 'ai.ml');
   course('深度学习（选修）', '任选', 'ai.dl');
   course('计算机视觉', '限选', 'ai.cv', 1); // flagged: never shown to students
+  course('机器学习课程设计', '必修', 'ai.ml'); // practice course: LLM/alias tag kept for admin + scoring, hidden from students
+  db.prepare("UPDATE course_skill SET extraction_method = 'llm', source = 'llm' WHERE course_id = 'a:机器学习课程设计'").run();
   db.prepare(`INSERT INTO occupation_skill (occupation_code, skill_id, importance, source, verified_by, note, extraction_method, reviewed) VALUES
     ('2-02-38-01', 'ai.ml', 'core', 'expert', 'SECRET VERIFIER', 'SECRET NOTE', 'expert', 1), ('2-02-38-01', 'ai.dl', 'core', 'expert', 'SECRET VERIFIER', NULL, 'expert', 1),
-    ('2-02-38-01', 'ai.cv', 'general', 'expert', 'SECRET VERIFIER', NULL, 'expert', 1)`).run();
+    ('2-02-38-01', 'ai.cv', 'general', 'expert', 'SECRET VERIFIER', NULL, 'expert', 1),
+    ('2-02-10-03', 'software.os', 'core', 'expert', 'x', NULL, 'expert', 1), ('2-02-10-03', 'ai.ml', 'core', 'expert', 'x', NULL, 'expert', 1),
+    ('2-02-10-03', 'ai.dl', 'core', 'expert', 'x', NULL, 'expert', 1), ('2-02-10-03', 'ai.cv', 'core', 'expert', 'x', NULL, 'expert', 1),
+    ('2-02-38-03', 'software.linux', 'core', 'expert', 'x', NULL, 'expert', 1)`).run();
+  course('操作系统', '必修', 'software.os');
   db.prepare(`INSERT INTO salary_stat (occupation_code, city, quarter, channel, education, sample_size, p25_month, p50_month, p75_month, computed_at, source_label, low_sample) VALUES
     ('2-02-38-01', '全部', '2024Q4-2026Q4', '全部', '本科', 45, 8000, 10000, 13000, 'x', '来源：全国某就业网，样本 45 条', 1),
     ('2-02-38-01', '全部', '2024Q4-2026Q4', '全部', '硕士', 12, 9000, 12000, 15000, 'x', '来源：某就业网', 1)`).run();
@@ -75,14 +81,25 @@ test('major-for-occupation detail: sentence, badges, uncovered skills to supplem
   assert.deepEqual(body.covered, [{ skill: '机器学习', courses: [{ course: '机器学习', type: '必修' }] }]);
   assert.deepEqual(body.to_supplement, [{ skill: '深度学习', courses: [{ course: '深度学习（选修）', type: '任选' }] }]);
   assert.deepEqual(body.general, [{ skill: '计算机视觉', covered: false, courses: [] }], 'needs_review course not shown');
-  assert.doesNotMatch(text, /SECRET|缺失|needs_review/);
+  assert.doesNotMatch(text, /SECRET|缺失|needs_review|课程设计/);
+});
+
+test('practice-course tags: hidden from students, still in the admin match (scoring unchanged)', async () => {
+  const { matchOccupation } = await import('../../match.js');
+  const db = new Database(process.env.CAREER_DB!, { readonly: true });
+  const mm = matchOccupation(db, '2-02-38-01')!.majors[0]!;
+  assert.ok(mm.skills.find((x) => x.skill === '机器学习')!.courses.some((c) => c.course === '机器学习课程设计'), 'admin keeps it');
+  db.close();
+  const { text } = await get('/occupation/2-02-38-01');
+  assert.doesNotMatch(text, /课程设计/);
 });
 
 test('reverse: major page ranks occupations by core coverage', async () => {
   const { body } = await get('/majors');
   assert.deepEqual(body, [{ school_id: 'name:甲大学', school: '甲大学', major_code: '080717T', major: '080717T' }]);
   const m = (await get(`/major/${encodeURIComponent('name:甲大学')}/080717T`)).body;
-  assert.equal(m.occupations[0].code, '2-02-38-01');
-  assert.equal(m.occupations[0].label, '核心能力 1/2');
+  // 2/4 and 1/2 tie on ratio: more covered core skills first; 0/1 is folded, not a row
+  assert.deepEqual(m.occupations.map((o: any) => `${o.code} ${o.label}`), ['2-02-10-03 核心能力 2/4', '2-02-38-01 核心能力 1/2']);
+  assert.deepEqual(m.not_covered, ['大数据开发工程师']);
   assert.equal((await publicApi.request('/major/x/y')).status, 404);
 });

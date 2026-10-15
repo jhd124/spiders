@@ -91,6 +91,18 @@ test('classifyTitle: specific rules first, non-tech excluded', () => {
 const fixture = JSON.parse(readFileSync(join(HERE, 'fixtures', 'upc_search_p1.json'), 'utf8')) as { data: { list: Record<string, unknown>[] } };
 const cleaned = fixture.data.list.map((r) => cleanOne(pickPublic(r, 'fixture', '2026-10-14T00:00:00Z'))!);
 
+test('EE / automation titles (expert 2026-10-15): 07-07 / 11-01 / 09-04; 硬件工程师 stays 嵌入式; 自动化测试 stays software', () => {
+  const c = (t: string) => classifyPosting(t).code;
+  for (const t of ['自动化工程师', '电气自动化工程师', 'PLC工程师', 'DCS工程师（青岛）']) assert.equal(c(t), '2-02-07-07', t);
+  for (const t of ['电气工程师', '电力系统工程师', '电力运维工程师', '电机工程师', '电力电子工程师']) assert.equal(c(t), '2-02-11-01', t);
+  for (const t of ['电子工程师', '硬件测试工程师', '测试工程师（硬件）', '仪器仪表工程师']) assert.equal(c(t), '2-02-09-04', t);
+  assert.equal(c('硬件工程师'), '2-02-10-06');
+  assert.equal(c('自动化测试工程师'), '2-02-10-03');
+  assert.equal(c('软件测试工程师'), '2-02-10-03');
+  assert.equal(c('网络运维工程师'), '2-02-10-04');
+  assert.equal(c('电力营销专员'), null);
+});
+
 test('UPC: only public fields kept, normalized posting', () => {
   const raw = pickPublic(fixture.data.list[0]!, 'Java', 't');
   assert.equal((raw as Record<string, unknown>).jltdyx, undefined, 'contact e-mail must not be stored');
@@ -270,7 +282,8 @@ test('expert classification batch 2 (34 no_match titles, 2026-10-14)', () => {
   }
   for (const t of ['STM32/单片机 软硬件开发', '硬件工程师', '硬件工程师-深圳']) assert.deepEqual(cls(t), [EMB, false], t);
   assert.deepEqual(classifyPosting('市场/数据分析师'), { code: DA, confidence: 0.8, multiRole: false, reason: 'first_role' });
-  assert.deepEqual(classifyPosting('电气/视觉工程师'), { code: AI, confidence: 0.8, multiRole: false, reason: 'first_role' });
+  // 2026-10-15: 电气 is now a pilot occupation (2-02-11-01), so by the same first-tech-role rule it wins over 视觉 (was AI before)
+  assert.deepEqual(classifyPosting('电气/视觉工程师'), { code: '2-02-11-01', confidence: 0.8, multiRole: false, reason: 'first_role' });
   for (const t of ['实施工程师', '技术支持管培生-山东', '技术支持管培生-陕西', '测评交付经理', '2027届校招-测评交付经理']) assert.deepEqual([classifyPosting(t).code, classifyPosting(t).reason], [null, 'support'], t);
   for (const t of ['数字芯片设计', '集成电路设计-深圳']) assert.deepEqual([classifyPosting(t).code, classifyPosting(t).reason], [null, 'chip'], t);
   for (const t of ['腾讯云智研发2026届暑期实习生', '腾讯云智研发2027届暑期实习生招聘', '阿里云管培生（商业技术工程师方向）', '技术类', '工程技术岗', '实习生', '综合实习生', '新零售校招生'])

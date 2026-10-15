@@ -5,7 +5,7 @@
  * Scoring per school x major:
  *   for each required skill s: best(s) = max course_skill.weight (原文明确 1.0 / 核心课名 0.8 / 课名推断 0.5) over the major's
  *   courses tagged with s, ignoring tags with needs_review = 1 (listed, flagged) and courses whose review was rejected.
- * Ranking (expert 2026-10-14, coverage counting): core_coverage = core skills covered by ≥1 必修/限选 course with a non-needs_review
+ * Ranking (expert 2026-10-14, coverage counting; 2026-10-15: equal ratio -> more covered core skills first): core_coverage = core skills covered by ≥1 必修/限选 course with a non-needs_review
  *   tag (any evidence tier) / core skills; general_coverage = same over general skills, 任选 courses included. Evidence weights no
  *   longer score; the weighted sums below are kept only as tie-breaks (core_coverage, general_coverage, core_score, general_score).
  * Legacy weighted sums (tie-break only):
@@ -135,6 +135,6 @@ export function matchOccupation(db: Database.Database, code: string): Occupation
       elective_only: sm.filter((s) => s.elective_only).map((s) => s.skill),
       missing: sm.filter((s) => !s.covered && !s.elective_only).map((s) => s.skill), flagged, skills: sm, coreBest };
   });
-  out.sort((a, b) => b.core_coverage - a.core_coverage || b.general_coverage - a.general_coverage || b.core_score - a.core_score || b.general_score - a.general_score || b.coreBest - a.coreBest || a.school.localeCompare(b.school) || a.major_code.localeCompare(b.major_code));
+  out.sort((a, b) => b.core_coverage - a.core_coverage || b.core_covered - a.core_covered || b.general_coverage - a.general_coverage || b.core_score - a.core_score || b.general_score - a.general_score || b.coreBest - a.coreBest || a.school.localeCompare(b.school) || a.major_code.localeCompare(b.major_code));
   return { ...base, majors: out.map(({ coreBest: _c, ...m }) => m) };
 }

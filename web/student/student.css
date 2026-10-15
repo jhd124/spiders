@@ -45,3 +45,4 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .b-必修 { background: #e6f4ea; color: #1a7f37; } .b-限选 { background: #eef4ff; color: #0b4fbf; } .b-任选 { background: #f3f4f6; color: #57606a; }
 .more { width: 100%; margin-top: 8px; padding: 10px; border: 1px dashed #b6cffb; background: #fff; color: #1f6feb; border-radius: 10px; font-size: 14px; }
 .bars li { grid-template-columns: 8.5em 1fr 3.2em; }
+.legend { margin: -4px 0 8px; } .fold { margin-top: 12px; line-height: 1.6; }

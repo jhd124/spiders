@@ -5,7 +5,7 @@ import { CAREER_DB } from '../CAREER/db.js';
 const postings = defineDataset({
   key: 'postings',
   title: 'JOBS · 招聘岗位',
-  description: '公开来源的岗位（v1：中国石油大学（华东）智慧就业网职位信息）。薪资已折算为元/月；occupation_code 按职位名称规则归到 8 个试点职业。',
+  description: '公开来源的岗位（v1：中国石油大学（华东）智慧就业网职位信息）。薪资已折算为元/月；occupation_code 按职位名称规则归到 11 个试点职业。',
   kind: 'sqlite',
   dbPath: CAREER_DB,
   table: 'job_posting',

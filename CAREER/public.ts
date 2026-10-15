@@ -1,11 +1,13 @@
 /**
  * Student-facing read-only views (/api/public/*, pages /s/). Scoring is CAREER/match.ts matchOccupation (not duplicated here);
  * this module only selects the student fields: no evidence quotes, review flags, weights, verifiers or admin notes.
- * Only courses with a non-needs_review tag are shown. "covered" for a core skill = taught by a 必修/限选 course (match.ts rule).
+ * Only courses with a non-needs_review tag are shown; practice courses (课程设计/实验/实习/实训/实践, expert 2026-10-15) are hidden
+ *  from students whatever the tag source (admin keeps them; scoring is unchanged). "covered" for a core skill = taught by a 必修/限选 course (match.ts rule).
  */
 import type Database from 'better-sqlite3';
 import { matchOccupation, type MajorMatch } from './match.js';
 import { skillComparison } from '../JOBS/compare.js';
+import { isPracticeCourse } from './curriculum/tag.js';
 
 export const MIN_PCT_SAMPLES = 30;
 export const FOOTER = '本结果依据各校公开的培养方案和招聘数据，反映的是课程设置，不代表教学质量或就业结果。目前只收录了 3 所试点学校。';
@@ -71,7 +73,7 @@ export function publicMajorForOccupation(db: Database.Database, code: string, sc
   if (!d || !mm) return null;
   const courses = (s: MajorMatch['skills'][number]) => {
     const seen = new Set<string>();
-    return s.courses.filter((c) => !c.needs_review && !seen.has(c.course) && seen.add(c.course))
+    return s.courses.filter((c) => !c.needs_review && !isPracticeCourse(c.course) && !seen.has(c.course) && seen.add(c.course))
       .map((c) => ({ course: c.course, type: badge(c.course_type) }))
       .sort((a, b) => ['必修', '限选', '任选'].indexOf(a.type) - ['必修', '限选', '任选'].indexOf(b.type));
   };
@@ -100,6 +102,7 @@ export function publicMajor(db: Database.Database, school: string, major: string
     const mm = matchOccupation(db, o.code)?.majors.find((x) => x.school_id === school && x.major_code === major);
     return mm ? [{ code: o.code, display_name: o.display_name, official_name: o.official_name, core_covered: mm.core_covered, core_total: mm.core_total,
       label: label(mm.core_covered, mm.core_total), _c: mm.core_coverage, _g: mm.general_coverage }] : [];
-  }).sort((a, b) => b._c - a._c || b._g - a._g || a.code.localeCompare(b.code)).map(({ _c, _g, ...r }) => r);
-  return { ...info, occupations: occs };
+  }).sort((a, b) => b._c - a._c || b.core_covered - a.core_covered || b._g - a._g || a.code.localeCompare(b.code)).map(({ _c, _g, ...r }) => r);
+  // expert 2026-10-15: 0/N occupations are not rows; the page folds them into one line 课程基本不涉及：…
+  return { ...info, occupations: occs.filter((o) => o.core_covered > 0), not_covered: occs.filter((o) => o.core_covered === 0).map((o) => o.display_name) };
 }
