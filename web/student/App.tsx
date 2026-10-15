@@ -35,7 +35,7 @@ export function StudentApp() {
   if (p[0] === 'occ' && p[1] && p[2] && p[3]) page = <MajorForOccPage code={p[1]} school={p[2]} major={p[3]} />;
   else if (p[0] === 'occ' && p[1]) page = <OccPage code={p[1]} />;
   else if (p[0] === 'major' && p[1] && p[2]) page = <MajorPage school={p[1]} major={p[2]} />;
-  else page = <Home />;
+  else page = <Home key={p[0] ?? ''} initial={p[0] === 'majors' ? 'major' : 'occ'} />;
   return (
     <div className="s-app">
       <header className="s-top"><a href={href.home}>职业 · 专业</a></header>
@@ -45,8 +45,8 @@ export function StudentApp() {
   );
 }
 
-function Home() {
-  const [tab, setTab] = useState<'occ' | 'major'>('occ');
+function Home({ initial }: { initial: 'occ' | 'major' }) {
+  const [tab, setTab] = useState<'occ' | 'major'>(initial);
   return (
     <>
       <div className="tabs">
@@ -119,12 +119,12 @@ function OccPage({ code }: { code: string }) {
             <>
               <table className="sal"><thead><tr><th>学历</th><th>样本</th><th>P25</th><th>中位数</th><th>P75</th></tr></thead>
                 <tbody>{d.salary.map((r) => (
-                  <tr key={r.education}><td>{r.education}</td><td>{r.sample_size}</td>
+                  <tr key={r.education}><td>{r.education === '全部' ? '全部学历' : r.education}</td><td>{r.sample_size}{r.note ? '*' : ''}</td>
                     {r.p50 == null ? <td colSpan={3} className="muted">样本不足 30 条，只显示数量</td> : <><td>{yuan(r.p25)}</td><td><b>{yuan(r.p50)}</b></td><td>{yuan(r.p75)}</td></>}
                   </tr>))}
                 </tbody></table>
-              {d.salary.some((r) => r.note) && <p className="note">样本较少，仅供参考</p>}
-              {[...new Set(d.salary.map((r) => r.source_label).filter(Boolean))].map((l) => <p key={l} className="src">{l}</p>)}
+              {d.salary.some((r) => r.note) && <p className="note">* 样本较少，仅供参考</p>}
+              {[...new Set(d.salary.map((r) => r.source_label.replace(/[，,]\s*样本\s*\d+\s*条/, '')).filter(Boolean))].map((l) => <p key={l} className="src">{l}</p>)}
             </>) : <p className="muted">暂时没有这个职业的薪资数据。</p>}
 
           <h2>招聘要求里常见的技能</h2>
@@ -138,13 +138,25 @@ function OccPage({ code }: { code: string }) {
 
           <h2>哪些专业的课程更对口</h2>
           <p className="muted small">按必修和限选课覆盖的核心能力数排序</p>
-          <ul className="cards">{d.majors.map((m) => (
-            <li key={m.school_id + m.major_code}><a href={href.majorForOcc(d.code, m.school_id, m.major_code)}>
+          <MajorList code={d.code} majors={d.majors} />
+        </>)}
+      </Loaded>
+    </>
+  );
+}
+
+const TOP_MAJORS = 6;
+function MajorList({ code, majors }: { code: string; majors: OccDetail['majors'] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? majors : majors.slice(0, TOP_MAJORS);
+  return (
+    <>
+          <ul className="cards">{shown.map((m) => (
+            <li key={m.school_id + m.major_code}><a href={href.majorForOcc(code, m.school_id, m.major_code)}>
               <b>{m.school} · {m.major}</b><span className="score">{m.label}</span>
             </a></li>))}
           </ul>
-        </>)}
-      </Loaded>
+          {majors.length > TOP_MAJORS && <button className="more" onClick={() => setAll(!all)}>{all ? '收起' : `展开全部 ${majors.length} 个专业`}</button>}
     </>
   );
 }
