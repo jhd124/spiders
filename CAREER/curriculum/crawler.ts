@@ -10,6 +10,7 @@ import { rawPath, readJson, writeJson } from '../../lib/io.js';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { isMain } from '../../lib/main.js';
+import { withCrawlRun, type CrawlRun } from '../../lib/crawllog.js';
 import { readManifest, type CurriculumSource } from './manifest.js';
 import { CURRICULUM_RAW, fetchFile, type FetchedFile } from './fetch.js';
 import { planUnits, type SectionInfo } from './plan.js';
@@ -23,6 +24,10 @@ export interface RawCurriculum {
 }
 
 export async function crawl(argv = process.argv.slice(2)): Promise<RawCurriculum> {
+  return withCrawlRun(RAW_NAME, (run) => crawlRun(run, argv));
+}
+
+async function crawlRun(run: CrawlRun, argv: string[]): Promise<RawCurriculum> {
   const refresh = argv.includes('--refresh');
   const only = argv.find((a) => a.startsWith('--only='))?.slice(7);
   const rows = readManifest().filter((r) => !only || r.major_code.includes(only) || r.school.includes(only));
@@ -49,10 +54,13 @@ export async function crawl(argv = process.argv.slice(2)): Promise<RawCurriculum
       const quality = textQuality(pages);
       const plan = planUnits(source, pages);
       out.docs.push({ source, meta, pages, quality, sections: plan.sections });
+      // snapshot without the page texts (they stay in the raw dump): source, file meta, quality, sections
+      run.record({ source, meta, quality, sections: plan.sections }, reuse ? 'skipped' : old?.meta ? (old.meta.sha256 === meta.sha256 ? 'duplicate' : 'updated') : 'new', { key: source.id, reused: !!reuse });
       console.log(`[${RAW_NAME}] ${source.school} ${source.major_code}: ${reuse ? 'reused stored file, ' : ''}${meta.bytes} bytes, ${plan.sections.length} major sections, ${quality.pages} pages, ${quality.chars} chars`);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       out.docs.push({ source, error });
+      run.fail(error, { source: source.id, school: source.school, major_code: source.major_code, url: source.url });
       console.error(`[${RAW_NAME}] ${source.school} ${source.major_code} failed: ${error}`);
     }
   }

@@ -6,6 +6,8 @@
  *  - retries on 429 / 5xx with exponential backoff
  */
 
+import { activeRun, type RequestMeta } from './crawllog.js';
+
 export const USER_AGENT =
   process.env.SPIDERS_UA ??
   'Mozilla/5.0 (compatible; spiders-bot/0.1; +https://github.com/jhd124/spiders)';
@@ -116,6 +118,8 @@ export interface PoliteFetchOptions {
   /** default GET; POST is for public search endpoints that the site's own (anonymous) UI calls the same way */
   method?: 'GET' | 'POST';
   body?: string;
+  /** keyword / page for the crawl run's request log (lib/crawllog.ts) */
+  log?: RequestMeta;
 }
 
 /** Fetch a URL politely and return the body text. Throws on non-2xx after retries. */
@@ -136,10 +140,15 @@ async function politeResponse(url: string, opts: PoliteFetchOptions): Promise<Re
   const u = new URL(url);
   const robots = await getRobots(u.origin);
   if (!isAllowed(robots, u.pathname + u.search)) {
+    activeRun()?.request({ method: opts.method ?? 'GET', url, keyword: opts.log?.keyword ?? null, page: opts.log?.page ?? null, status: null, bytes: null, elapsed_ms: 0, attempt: 0, error: 'robots.txt disallows' });
     throw new RobotsDisallowedError(`robots.txt disallows ${url}`);
   }
   const delay = Math.max(opts.delayMs ?? DEFAULT_DELAY_MS, robots.crawlDelayMs ?? 0);
   const retries = opts.retries ?? 3;
+
+  const method = opts.method ?? 'GET';
+  const logReq = (attempt: number, t0: number, status: number | null, bytes: number | null, error?: string) =>
+    activeRun()?.request({ method, url, keyword: opts.log?.keyword ?? null, page: opts.log?.page ?? null, status, bytes, elapsed_ms: Date.now() - t0, attempt, error: error ?? null });
 
   for (let attempt = 0; ; attempt++) {
     const last = lastRequestAt.get(u.host) ?? 0;
@@ -147,20 +156,28 @@ async function politeResponse(url: string, opts: PoliteFetchOptions): Promise<Re
     if (wait > 0) await sleep(wait);
     lastRequestAt.set(u.host, Date.now());
 
+    const t0 = Date.now();
     let res: Response;
     try {
       res = await fetch(url, {
         headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/json;q=0.9,*/*;q=0.8', ...opts.headers },
         redirect: 'follow',
-        method: opts.method ?? 'GET',
+        method,
         body: opts.body,
       });
     } catch (err) {
+      logReq(attempt, t0, null, null, err instanceof Error ? err.message : String(err));
       if (attempt >= retries) throw err;
       await sleep(2 ** attempt * 2000);
       continue;
     }
-    if (res.ok) return res;
+    if (res.ok) {
+      // read the body here so the run log has the real byte count; hand back an equivalent Response
+      const buf = await res.arrayBuffer();
+      logReq(attempt, t0, res.status, buf.byteLength);
+      return new Response(buf, { status: res.status, statusText: res.statusText, headers: res.headers });
+    }
+    logReq(attempt, t0, res.status, Number(res.headers.get('content-length')) || null, `HTTP ${res.status}`);
     if ((res.status === 429 || res.status >= 500) && attempt < retries) {
       const ra = Number(res.headers.get('retry-after'));
       await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : 2 ** attempt * 3000);

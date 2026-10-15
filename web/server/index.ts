@@ -17,6 +17,7 @@ import { HttpError, RunManager } from './runs.js';
 import { review } from './review.js';
 import { aliases, jobs, match, syncOccupationSkills } from './match.js';
 import { publicApi } from './public.js';
+import { crawlLogs } from './crawllogs.js';
 import { describeDataset, getItem, listDatasets, queryDataset } from './query.js';
 import type { CrawlerView, GroupView, LogLine, Run, Task } from '../shared/types.js';
 
@@ -169,6 +170,7 @@ app.get('/api/datasets/:group/items/:id{.+}', async (c) =>
 );
 
 app.route('/api/public', publicApi);
+app.route('/api/crawl-runs', crawlLogs);
 app.route('/api/review/curriculum', review);
 app.route('/api/match', match);
 app.route('/api/aliases', aliases);

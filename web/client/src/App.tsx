@@ -6,6 +6,7 @@ import { ReviewPage } from './ReviewPage';
 import { MatchPage } from './MatchPage';
 import { AliasesPage } from './AliasesPage';
 import { JobsDemandPage } from './JobsDemandPage';
+import { CrawlLogsPage } from './CrawlLogsPage';
 
 /** Tiny hash router: #/crawlers, #/runs/<id>, #/data/<group> */
 function useHash(): string {
@@ -29,15 +30,17 @@ export function App() {
   else if (parts[0] === 'match') page = <MatchPage code={parts[1] ? decodeURIComponent(parts[1]) : undefined} />;
   else if (parts[0] === 'aliases') page = <AliasesPage />;
   else if (parts[0] === 'jobs') page = <JobsDemandPage code={parts[1] ? decodeURIComponent(parts[1]) : undefined} />;
+  else if (parts[0] === 'crawl-logs') page = <CrawlLogsPage id={parts[1] ? decodeURIComponent(parts[1]) : undefined} />;
   else page = <CrawlersPage />;
 
-  const tab = parts[0] === 'data' ? 'data' : parts[0] === 'review' ? 'review' : parts[0] === 'match' ? 'match' : parts[0] === 'aliases' ? 'aliases' : parts[0] === 'jobs' ? 'jobs' : 'crawlers';
+  const tab = parts[0] === 'data' ? 'data' : parts[0] === 'review' ? 'review' : parts[0] === 'match' ? 'match' : parts[0] === 'aliases' ? 'aliases' : parts[0] === 'jobs' ? 'jobs' : parts[0] === 'crawl-logs' ? 'crawl-logs' : 'crawlers';
   return (
     <div className="app">
       <header className="topbar">
         <span className="brand">🕷 spiders</span>
         <nav>
           <a href="#/crawlers" className={tab === 'crawlers' ? 'active' : ''}>爬虫管理</a>
+          <a href="#/crawl-logs" className={tab === 'crawl-logs' ? 'active' : ''}>抓取日志</a>
           <a href="#/data" className={tab === 'data' ? 'active' : ''}>数据查询</a>
           <a href="#/review" className={tab === 'review' ? 'active' : ''}>课程审核</a>
           <a href="#/match" className={tab === 'match' ? 'active' : ''}>职业匹配</a>

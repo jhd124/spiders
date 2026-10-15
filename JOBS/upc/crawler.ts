@@ -16,6 +16,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { politeFetch } from '../../lib/http.js';
+import { withCrawlRun, type CrawlRun } from '../../lib/crawllog.js';
 import { RAW_DIR, readJson, writeJson } from '../../lib/io.js';
 import { isMain } from '../../lib/main.js';
 import { OCCUPATION_RULES } from '../occupations.js';
@@ -55,6 +56,7 @@ export async function fetchPage(keyword: string, page: number): Promise<SearchRe
     method: 'POST',
     body,
     delayMs: DELAY_MS,
+    log: { keyword, page },
     headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
   });
   return JSON.parse(txt) as SearchResp;
@@ -63,6 +65,12 @@ export async function fetchPage(keyword: string, page: number): Promise<SearchRe
 const arg = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
 
 export async function crawl(opts: { keywords?: string[]; maxPages?: number; fresh?: boolean; budget?: number } = {}) {
+  return withCrawlRun('jobs-upc', (run) => crawlRun(run, opts));
+}
+
+const sameRecord = (a: UpcRaw, b: UpcRaw) => JSON.stringify({ ...a, _fetchedAt: '', _keyword: '' }) === JSON.stringify({ ...b, _fetchedAt: '', _keyword: '' });
+
+async function crawlRun(run: CrawlRun, opts: { keywords?: string[]; maxPages?: number; fresh?: boolean; budget?: number }) {
   const keywords = opts.keywords ?? [...new Set(OCCUPATION_RULES.flatMap((r) => r.keywords))];
   const maxPages = opts.maxPages ?? 10;
   let budget = opts.budget ?? 400;
@@ -81,16 +89,19 @@ export async function crawl(opts: { keywords?: string[]; maxPages?: number; fres
         r = await fetchPage(kw, page);
       } catch (e) {
         console.error(`[jobs:upc] ${kw} p${page} failed: ${e instanceof Error ? e.message : e}`);
+        run.fail(`fetch failed: ${e instanceof Error ? e.message : e}`, { keyword: kw, page });
         break;
       }
       fetched++;
-      if (r.code === 403) { state.pages[key] = 'gated'; gated++; console.log(`[jobs:upc] ${kw} p${page}: login-gated, skipped`); continue; }
-      if (r.code !== 200 || !r.data) { console.error(`[jobs:upc] ${kw} p${page}: code ${r.code} ${r.message ?? ''}`); break; }
+      if (r.code === 403) { state.pages[key] = 'gated'; gated++; run.note('gated_pages', gated); console.log(`[jobs:upc] ${kw} p${page}: login-gated, skipped`); continue; }
+      if (r.code !== 200 || !r.data) { console.error(`[jobs:upc] ${kw} p${page}: code ${r.code} ${r.message ?? ''}`); run.fail(`site code ${r.code} ${r.message ?? ''}`.trim(), { keyword: kw, page }); break; }
       const now = new Date().toISOString();
       for (const rec of r.data.list) {
         const p = pickPublic(rec, kw, now);
-        if (!p.zwid) continue;
-        if (!state.postings[p.zwid]) added++;
+        if (!p.zwid) { run.record(p, 'skipped', { keyword: kw, page, reason: 'no zwid' }); continue; }
+        const prev = state.postings[p.zwid];
+        if (!prev) added++;
+        run.record(p, !prev ? 'new' : sameRecord(prev, p) ? 'duplicate' : 'updated', { keyword: kw, page, key: p.zwid });
         state.postings[p.zwid] = { ...p, _keyword: state.postings[p.zwid]?._keyword ?? kw };
       }
       const total = Number(r.data.total) || 0;

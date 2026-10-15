@@ -203,7 +203,7 @@ export class RunManager {
     // detached => own process group, so stop() can kill grandchildren (run-group spawns more processes)
     const child = spawn(process.execPath, cmdArgs, {
       cwd: ROOT,
-      env: { ...process.env, FORCE_COLOR: '0' },
+      env: { ...process.env, FORCE_COLOR: '0', SPIDERS_WEB_RUN_ID: String(id) },
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

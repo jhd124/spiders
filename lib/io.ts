@@ -32,20 +32,25 @@ export async function runSources(
   school: string,
   sources: Record<string, () => Promise<unknown[]>>,
 ): Promise<RawDump> {
-  const dump: RawDump = { school, scrapedAt: new Date().toISOString(), sources: {} };
-  for (const [name, fn] of Object.entries(sources)) {
-    try {
-      const items = await fn();
-      dump.sources[name] = items;
-      console.log(`[${school}] ${name}: ${items.length} records`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[${school}] ${name} failed: ${msg}`);
-      (dump.errors ??= {})[name] = msg;
-      dump.sources[name] = [];
+  const { withCrawlRun } = await import('./crawllog.js');
+  return withCrawlRun(school, async (run) => {
+    const dump: RawDump = { school, scrapedAt: new Date().toISOString(), sources: {} };
+    for (const [name, fn] of Object.entries(sources)) {
+      try {
+        const items = await fn();
+        dump.sources[name] = items;
+        for (const it of items) run.record(it, 'fetched', { source: name });
+        console.log(`[${school}] ${name}: ${items.length} records`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[${school}] ${name} failed: ${msg}`);
+        run.fail(msg, { source: name });
+        (dump.errors ??= {})[name] = msg;
+        dump.sources[name] = [];
+      }
     }
-  }
-  await writeJson(rawPath(school), dump);
-  console.log(`[${school}] raw -> ${rawPath(school)}`);
-  return dump;
+    await writeJson(rawPath(school), dump);
+    console.log(`[${school}] raw -> ${rawPath(school)}`);
+    return dump;
+  });
 }
