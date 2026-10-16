@@ -210,3 +210,52 @@ test('trailing code forms: bracketed 专业代码 and bare suffix', () => {
   assert.deepEqual(splitCodes('软件工程0835'), { codes: ['0835'], name: '软件工程' });
   assert.deepEqual(m('软件工程0835', 'grad'), ['grad', '0835', 'exact', 0]);
 });
+
+test('segment markers (expert list): 以…专业报考 / …专业为 / 或·且 / …招收 / 大学本科+code / 研究生+code, 。；', () => {
+  const lv = (t: string) => splitMajors(t).map((x) => `${x.level}:${x.phrase}`);
+  assert.deepEqual(lv('以本科专业报考：法学类、计算机类。以研究生专业报考：法学、软件工程。'), ['undergrad:法学类', 'undergrad:计算机类', 'grad:法学', 'grad:软件工程']);
+  assert.deepEqual(lv('以大学本科专业报考：0301法学类；  以研究生专业报考：0301法学、0351法律'), ['undergrad:0301法学类', 'grad:0301法学', 'grad:0351法律']);
+  assert.deepEqual(lv('本科专业为法学类、计算机类（专业代码0809开头），或研究生专业为法学、数字经济（专业代码02开头）'),
+    ['undergrad:法学类', 'undergrad:计算机类（专业代码0809开头）', 'grad:法学', 'grad:数字经济（专业代码02开头）']);
+  assert.deepEqual(lv('研究生专业为法学（0301）、法律（0351），且本科专业为法学（030101K）'), ['grad:法学（0301）', 'grad:法律（0351）', 'undergrad:法学（030101K）']);
+  assert.deepEqual(lv('本科生招收法学（030101K）；研究生招收法学（0301）'), ['undergrad:法学（030101K）', 'grad:法学（0301）']);
+  assert.deepEqual(lv('大学本科0809计算机类；研究生08工学。（专业应为计算机科学与技术、软件工程等相关专业）'),
+    ['undergrad:0809计算机类', 'grad:08工学（专业应为计算机科学与技术、软件工程等相关专业）']);
+  assert.deepEqual(lv('法学类；计算机类'), ['any:法学类', 'any:计算机类'], 'no marker → not inherited');
+});
+
+test('bracket qualifiers: code syntax, sub-restriction, exclusion, 门类, XX类', () => {
+  const c3: Catalogs = { ...cat, majors: new Map([...cat.majors, ['030102', '知识产权'], ['050106T', '书法学']]), ugCategories: new Map([['08', '工学'], ['03', '法学']]),
+    grad: new Map([...cat.grad, ['02', '经济学'], ['0258', '数字经济']]) };
+  const q = (p: string, l: 'any' | 'undergrad' | 'grad' = 'any') => { const r = matchPhrase(p, l, c3); return [r.match_type, r.major_code, r.code_doubtful]; };
+  assert.deepEqual(q('计算机类（专业代码0809开头）', 'undergrad'), ['category', '0809', 0]);
+  assert.deepEqual(q('计算机类（专业代0809开头）', 'undergrad'), ['category', '0809', 0]);
+  assert.deepEqual(q('数字经济（专业代码02开头）', 'grad'), ['exact', '0258', 0], 'prefix 02 agrees with 0258');
+  assert.deepEqual(q('0301法学类（法学）', 'undergrad'), ['exact', '030101K', 0], 'restricted to the named major');
+  assert.deepEqual(q('（0301法学类（法学）', 'undergrad'), ['exact', '030101K', 0], 'stray opening bracket');
+  assert.deepEqual(q('计算机类（不含软件工程、数据科学与大数据技术）', 'undergrad'), ['exact', '080901', 0], 'class minus excluded');
+  assert.equal(q('计算机类（不含量子玄学）', 'undergrad')[0], 'unresolved', 'unknown exclusion → not guessed');
+  assert.equal(q('1202工商管理学（会计学、财务管理、审计学）', 'grad')[0], 'unresolved', '研究生 二级学科 list not in our catalog');
+  assert.deepEqual(q('02经济学门类', 'grad'), ['category', '02', 0]);
+  assert.deepEqual(q('法学门类', 'undergrad'), ['category', '03', 0]);
+  assert.deepEqual(q('计算机科学与技术类', 'grad'), ['exact', '0812', 1], 'XX类 → catalog name XX, flagged');
+  assert.equal(q('计算机科学与技术等相关专业')[0], 'related');
+  assert.equal(q('经济学类（不含统计等专业）')[0], 'unresolved', '「等专业」 inside an exclusion is not 「相关」; 经济学类 absent here');
+  // no substring matching: 法学 never yields 书法学, 工学 never 医工学
+  assert.deepEqual(q('法学', 'undergrad'), ['exact', '030101K', 0]);
+  assert.equal(q('书法', 'undergrad')[0], 'unresolved');
+});
+
+test('more markers and qualifiers: 本科为/研究生为, 本科或研究生为, 专业 suffix, 专业代码为…开头，不含…', () => {
+  const lv = (t: string) => splitMajors(t).map((x) => `${x.level}:${x.phrase}`);
+  assert.deepEqual(lv('本科为0809计算机类或研究生为0812计算机科学与技术'), ['undergrad:0809计算机类', 'grad:0812计算机科学与技术']);
+  assert.deepEqual(lv('大学本科为理工科专业，研究生为法学'), ['undergrad:理工科专业', 'grad:法学']);
+  assert.deepEqual(lv('本科或研究生为03法学、12管理学'), ['any:03法学', 'any:12管理学']);
+  assert.deepEqual(m('软件工程专业', 'undergrad'), ['undergrad', '080902', 'exact', 0]);
+  const r = matchPhrase('计算机类（专业代码为0809开头，不含软件工程）', 'undergrad', cat);
+  assert.deepEqual([r.major_code, r.code_doubtful], ['080901|080910T', 0]);
+});
+
+test('code syntax with 仅限', () => {
+  assert.deepEqual(m('法学（仅限专业代码030101K）', 'undergrad'), ['undergrad', '030101K', 'exact', 0]);
+});

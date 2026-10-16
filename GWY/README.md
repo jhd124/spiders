@@ -28,3 +28,10 @@ Expert rules part 2: rule rows carry `source` (专家规则). If a position's �
 unparseable list makes the phrase unresolved (`remarks_override = 2`). Positions with any unresolved/related phrase get
 `gwy_position.majors_incomplete = 1` and are left out of gwy_position_undergrad_major (major page counts);
 gk2027_match_stats.json → undergrad.positions_incomplete / hires_incomplete backs the note 部分岗位的专业要求尚未归类.
+
+Segmentation (2026-10-16): segments end at 。；; or a level marker — 以(大学)本科专业报考： / 以研究生专业报考： / (或|且)本科专业为 /
+(或|且)研究生专业为 / 本科生招收 / 研究生招收 / 本科或研究生为 (both) / 大学本科0809… / 研究生08…; a bracket-only segment
+「（专业应为…）」 qualifies the previous item. Bracket qualifiers: 「（专业代码0809开头）」「（仅限专业代码030101K）」 are codes
+(开头 = prefix); 「0301法学类（法学）」 restricts a 本科 class to the named majors; 「XX类（不含A、B）」 is the class minus A, B
+(unknown items → unresolved); 「XX门类」 is the category; 「XX类」 where XX is a catalog name matches XX, flagged
+code_doubtful. A trailing 专业 is dropped. Exact names only — never substring matches.
