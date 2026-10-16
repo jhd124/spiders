@@ -40,7 +40,7 @@ const share = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : 0
 export interface GwyForMajor {
   notice: { id: string; title: string }; major_code: string;
   undergrad: { positions: number; hires: number; party: { positions: number; pct: number }; fresh_grad: { positions: number; pct: number } };
-  needs_grad: { positions: number; hires: number };
+  needs_grad: { positions: number; hires: number; /** 对口 graduate 一级学科/专硕 names for this 专业类 */ pathway: string[] };
   note: string;
 }
 
@@ -55,7 +55,14 @@ export function publicGwyForMajor(db: Database.Database, major: string, noticeId
   const party = ug.filter((r) => isPartyOnly(r.political)).length, fresh = ug.filter((r) => isFreshGradOnly(r.remarks)).length;
   // 读对口研究生后可报: undergrad-catalog matches (major / 专业类 / 门类) OR graduate-catalog codes from grad_pathway.csv
   const cls = major.slice(0, 4), cat = major.slice(0, 2), bare = major.replace(/[A-Z]+$/, '');
-  const pathway = new Set((loadGradPathway().get(cls) ?? []).map((x) => x.grad_code));
+  const pathwayRows = loadGradPathway().get(cls) ?? [];
+  const pathway = new Set(pathwayRows.map((x) => x.grad_code));
+  const pathwayNames = pathwayRows.length
+    ? (() => {
+        const names = new Map((db.prepare('SELECT code, name FROM gwy_grad_discipline').all() as { code: string; name: string }[]).map((r) => [r.code, r.name]));
+        return pathwayRows.map((x) => names.get(x.grad_code) ?? x.grad_code);
+      })()
+    : [];
   const rows = db.prepare(`SELECT p.dept_code, p.position_code, p.hires, m.catalog, m.major_code FROM gwy_position p JOIN gwy_position_major m
     ON m.notice_id = p.notice_id AND m.dept_code = p.dept_code AND m.position_code = p.position_code
     WHERE p.notice_id = ? AND p.needs_grad = 1 AND m.major_code IS NOT NULL`).all(noticeId) as { dept_code: string; position_code: string; hires: number; catalog: string | null; major_code: string }[];
@@ -77,7 +84,7 @@ export function publicGwyForMajor(db: Database.Database, major: string, noticeId
   return {
     notice, major_code: major,
     undergrad: { positions: ug.length, hires: sum(ug.map((r) => r.hires)), party: { positions: party, pct: share(party, ug.length) }, fresh_grad: { positions: fresh, pct: share(fresh, ug.length) } },
-    needs_grad: { positions: ng.size, hires: sum([...ng.values()]) },
+    needs_grad: { positions: ng.size, hires: sum([...ng.values()]), pathway: pathwayNames },
     note: GWY_SOURCE_NOTE,
   };
 }

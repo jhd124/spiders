@@ -17,6 +17,9 @@ migrate(process.env.CAREER_DB!, () => {});
 const db = new Database(process.env.CAREER_DB!);
 db.pragma('foreign_keys = OFF');
 db.prepare("INSERT INTO gwy_notice (id, year, exam_type, title, url) VALUES ('gk2027', 2027, '国考', '2027年度国考', 'u')").run();
+for (const [code, name, kind] of [['0812','计算机科学与技术','academic'],['0835','软件工程','academic'],['0839','网络空间安全','academic'],['0854','电子信息','professional'],['0808','电气工程','academic'],['0811','控制科学与工程','academic'],['0858','能源动力','professional']] as const)
+  db.prepare('INSERT INTO gwy_grad_discipline (code, name, kind, category_code, master_only, edition, source_url, fetched_at) VALUES (?,?,?,?,0,?,?,?)').run(code, name, kind, code.slice(0,2), '2022', 'u', 'x');
+
 const pos = (code: string, hires: number, political: string, remarks: string, needsGrad = 0) =>
   db.prepare('INSERT INTO gwy_position (notice_id, dept_code, position_code, sheet, row_no, hires, political, remarks, needs_grad, raw_json) VALUES (?,?,?,?,?,?,?,?,?,?)')
     .run('gk2027', 'D', code, 's', Number(code.slice(1)), hires, political, remarks, needsGrad, '{}');
@@ -42,7 +45,8 @@ test('flags', () => {
 test('counts for a 本科 major', () => {
   const g = publicGwyForMajor(db, '080901')!;
   assert.deepEqual(g.undergrad, { positions: 3, hires: 6, party: { positions: 1, pct: 33.3 }, fresh_grad: { positions: 2, pct: 66.7 } });
-  assert.deepEqual(g.needs_grad, { positions: 2, hires: 10 }, 'G1 via its 本科 class, G3 exact; G2 is a 研究生 code');
+  assert.equal(g.needs_grad.positions, 2); assert.equal(g.needs_grad.hires, 10);
+  assert.deepEqual(g.needs_grad.pathway, ['计算机科学与技术', '软件工程', '网络空间安全', '电子信息'], '080901 inherits 0809 pathway names');
   assert.equal(g.note, GWY_SOURCE_NOTE);
   assert.deepEqual(publicGwyForMajor(db, '080601')!.undergrad.positions, 1);
   assert.deepEqual(publicGwyForMajor(db, '999999')!.undergrad, { positions: 0, hires: 0, party: { positions: 0, pct: 0 }, fresh_grad: { positions: 0, pct: 0 } });
@@ -90,4 +94,5 @@ test('读对口研究生后可报: pathway codes (catalogs kept separate)', () =
   const autoKeys = new Set(); // just check counts: G5 + G6 at least
   assert.ok(auto.needs_grad.positions >= 2);
   assert.ok(auto.needs_grad.hires >= 8 + 9);
+  assert.deepEqual(publicGwyForMajor(db, '080601')!.needs_grad.pathway, ['电气工程', '控制科学与工程', '能源动力']);
 });

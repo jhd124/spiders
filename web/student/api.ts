@@ -13,7 +13,7 @@ export interface MajorDetail extends MajorItem { not_covered: string[]; occupati
 
 export interface GwyForMajor { notice: { id: string; title: string }; major_code: string;
   undergrad: { positions: number; hires: number; party: { positions: number; pct: number }; fresh_grad: { positions: number; pct: number } };
-  needs_grad: { positions: number; hires: number }; note: string }
+  needs_grad: { positions: number; hires: number; pathway: string[] }; note: string }
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(`/api/public${path}`);

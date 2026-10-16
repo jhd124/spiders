@@ -231,7 +231,10 @@ function GwyBlock({ major }: { major: string }) {
         <li>要求中共党员 <b>{u.party.positions}</b> 个<span className="muted">（{u.party.pct}%）</span></li>
         <li>限应届毕业生 <b>{u.fresh_grad.positions}</b> 个<span className="muted">（{u.fresh_grad.pct}%）</span><span className="muted small gwy-hint">应届毕业生的范围以当年公告为准</span></li>
       </ul>
-      <div className="gwy-grad"><span>读对口研究生后可报</span><b>{g.needs_grad.positions}</b> 个岗位<span className="muted">，共招 {g.needs_grad.hires} 人</span></div>
+      <div className="gwy-grad">
+        <div><span>读对口研究生后可报</span><b>{g.needs_grad.positions}</b> 个岗位<span className="muted">，共招 {g.needs_grad.hires} 人</span></div>
+        {g.needs_grad.pathway.length > 0 && <p className="muted small gwy-path">对口：{g.needs_grad.pathway.join('、')}</p>}
+      </div>
       <p className="muted small">{g.note}</p>
     </section>
   );

@@ -54,3 +54,4 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .gwy-grad { border-top: 1px dashed #eceef1; padding-top: 8px; margin-top: 4px; }
 .gwy-grad span:first-child { display: inline-block; background: #f3f4f6; border-radius: 6px; padding: 1px 6px; margin-right: 6px; font-size: 12px; }
 .gwy-hint { margin-left: 6px; }
+.gwy-path { margin: 4px 0 0; }
