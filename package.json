@@ -63,7 +63,9 @@
     "crawl:gwy-gk2027": "tsx GWY/gk2027/crawler.ts",
     "gwy:ingest": "tsx GWY/ingest.ts",
     "gwy:all": "npm run crawl:gwy-grad && npm run crawl:gwy-gk2027 && npm run gwy:ingest",
-    "test:gwy": "tsx --test GWY/test/*.test.ts"
+    "test:gwy": "tsx --test GWY/test/*.test.ts",
+    "gaokao:sd-toudang": "tsx GAOKAO/ingest.ts",
+    "test:gaokao": "tsx --test GAOKAO/test/*.test.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

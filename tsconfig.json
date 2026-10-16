@@ -19,6 +19,7 @@
     "CAREER/**/*.ts",
     "JOBS/**/*.ts",
     "GWY/**/*.ts",
+    "GAOKAO/**/*.ts",
     "scripts/**/*.ts",
     "web/server/**/*.ts",
     "web/shared/**/*.ts",
