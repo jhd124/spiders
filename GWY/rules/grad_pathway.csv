@@ -1,7 +1,17 @@
-# 本科专业类 → 对口的研究生一级学科 / 专业学位类别（「读对口研究生后可报」）。待专家填写；空表时只按现有逻辑计数。
-# ug_class      本科专业类代码（4位，2020版本科目录），如 0809
-# ug_class_name 本科专业类名称（核对用），如 计算机类
-# grad_code     2022 研究生目录代码：一级学科 4 位（0812）或专业学位类别 4 位（0854）；一行一个
-# grad_kind     academic（一级学科）| professional（专硕类别）
-# note / reviewer / source / reviewed   说明；审核人；依据（专家规则）；1 = 已审
+# 本科专业类 → 对口的研究生一级学科 / 专业学位类别（「读对口研究生后可报」）。专家 2026-10-16。
+# ug_class 与 grad_code 同为 4 位数字但分属本科 / 研究生目录，切勿混用（如本科 0808=自动化类，研究生 0808=电气工程）。
+# ug_class,ug_class_name,grad_code,grad_kind,note,reviewer,source,reviewed
 ug_class,ug_class_name,grad_code,grad_kind,note,reviewer,source,reviewed
+0809,计算机类,0812,academic,计算机科学与技术,专家,专家规则,1
+0809,计算机类,0835,academic,软件工程,专家,专家规则,1
+0809,计算机类,0839,academic,网络空间安全,专家,专家规则,1
+0809,计算机类,0854,professional,电子信息,专家,专家规则,1
+0807,电子信息类,0809,academic,电子科学与技术,专家,专家规则,1
+0807,电子信息类,0810,academic,信息与通信工程,专家,专家规则,1
+0807,电子信息类,1401,academic,集成电路科学与工程,专家,专家规则,1
+0807,电子信息类,0854,professional,电子信息,专家,专家规则,1
+0808,自动化类,0811,academic,控制科学与工程,专家,专家规则,1
+0808,自动化类,0854,professional,电子信息,专家,专家规则,1
+0806,电气类,0808,academic,电气工程,专家,专家规则,1
+0806,电气类,0811,academic,控制科学与工程,专家,专家规则,1
+0806,电气类,0858,professional,能源动力,专家,专家规则,1

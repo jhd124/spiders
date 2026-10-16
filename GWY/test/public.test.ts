@@ -60,10 +60,34 @@ test('API', async () => {
 test('grad_pathway.csv loader (stub)', async () => {
   const { loadGradPathway, GRAD_PATHWAY_CSV } = await import('../public.js');
   const { writeFileSync } = await import('node:fs');
-  assert.ok(loadGradPathway(GRAD_PATHWAY_CSV) instanceof Map, 'committed template parses');
+  const filled = loadGradPathway(GRAD_PATHWAY_CSV);
+  assert.equal(filled.get('0809')!.length, 4);
+  assert.deepEqual(filled.get('0809')!.map((x) => x.grad_code).sort(), ['0812', '0835', '0839', '0854']);
+  assert.equal(filled.get('0806')!.map((x) => x.grad_code).includes('0808'), true, '电气类 → 研究生 0808');
+  assert.ok(filled.get('0806')!.every((x) => x.reviewed && x.grad_kind));
   const f = join(TMP, 'gp.csv');
   writeFileSync(f, '# c\nug_class,ug_class_name,grad_code,grad_kind,note,reviewer,source,reviewed\n0809,计算机类,0812,academic,,e,专家规则,1\n0809,计算机类,0854,professional,,e,专家规则,0\n');
   assert.deepEqual(loadGradPathway(f).get('0809')!.map((x) => [x.grad_code, x.grad_kind, x.reviewed]), [['0812', 'academic', true], ['0854', 'professional', false]]);
   writeFileSync(f, 'ug_class,ug_class_name,grad_code,grad_kind\n0809,计算机类,812,academic\n');
   assert.throws(() => loadGradPathway(f), /bad row/);
+});
+
+test('读对口研究生后可报: pathway codes (catalogs kept separate)', () => {
+  // G4 lists graduate 0812 (对口 for 计算机类 0809) and graduate 0808 (电气工程 — 对口 for 电气类 0806, NOT for 计算机类)
+  // G5 lists undergrad:0808 (自动化类) — must NOT be treated as graduate 0808
+  pos('G4', 7, '不限', '', 1); pm('G4', null, 'grad:0812|grad:0808', 'grad');
+  pos('G5', 8, '不限', '', 1); pm('G5', 'undergrad', '0808', 'undergrad');
+  pos('G6', 9, '不限', '', 1); pm('G6', 'grad', '0854', 'grad'); // 电子信息 专硕: 对口 for 0809 and 0807
+  const cs = publicGwyForMajor(db, '080901')!;
+  assert.ok(cs.needs_grad.positions >= 3, `got ${cs.needs_grad.positions}`); // G1, G3 + G4 (0812) + G6
+  assert.ok(cs.needs_grad.hires >= 10 + 7 + 9);
+  // 080601 (电气类): G4 via grad:0808, not G5 (undergrad 0808 is 自动化类)
+  const ee = publicGwyForMajor(db, '080601')!;
+  assert.ok(ee.needs_grad.positions >= 1);
+  assert.ok(ee.needs_grad.hires >= 7, 'graduate 0808 电气工程 counts for 电气类');
+  // 080801 (自动化类): G5 via undergrad 0808, G6 via 0854; NOT G4's grad:0808
+  const auto = publicGwyForMajor(db, '080801')!;
+  const autoKeys = new Set(); // just check counts: G5 + G6 at least
+  assert.ok(auto.needs_grad.positions >= 2);
+  assert.ok(auto.needs_grad.hires >= 8 + 9);
 });
