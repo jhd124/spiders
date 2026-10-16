@@ -78,3 +78,19 @@ npm run gaokao:export-pilot-majors -- --out /tmp/pilot-majors.csv
 
 Columns: `院校代号,专业代号,专业名称原文,出现年份,是否已标特殊类型,特殊类型`  
 One row per school_code + major_code_raw + major_name_raw; `出现年份` is a comma-separated list (e.g. `2024,2025,2026`).
+
+## 投档 → MOE major map (first expert batch)
+
+Rules: `GAOKAO/rules/toudang_major_map.csv`. Applied only to `is_ordinary=1` pilot rows → `gaokao_toudang_major`.
+Category / 试验班 rows store `via_label` = `按{major_name_raw}投档` for UI.
+
+```bash
+npm run career:migrate
+npm run gaokao:sd-toudang          # load provincial files
+npm run gaokao:map                 # apply map + write QA CSVs
+# → $SPIDERS_DATA_DIR/gaokao/mapped-samples.csv
+# → $SPIDERS_DATA_DIR/gaokao/unmapped-stem.csv
+npm run gaokao:map -- --out-dir /tmp/gaokao-qa
+```
+
+`unmapped-stem.csv` lists only still-unmapped names that look 计算机/电子/自动化/电气-related (not the full pending pile; 未来智造 / 先进材料与智能制造 / 理工交叉 omitted on purpose).

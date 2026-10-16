@@ -1,0 +1,33 @@
+# Expert first-batch 投档 major_name_raw → MOE major codes (2026-10-16).
+# school_code: empty or * = all pilots (A422/A425/H213); or a specific code
+# name_pattern: exact, prefix with trailing *, or multiple * wildcards
+# major_codes: | -separated; match_type: exact | category
+school_code,name_pattern,major_codes,match_type,note
+*,计算机科学与技术,080901,exact,
+*,软件工程,080902,exact,
+*,人工智能,080717T,exact,
+*,电子信息工程,080701,exact,
+*,通信工程,080703,exact,
+*,自动化,080801,exact,
+*,电气工程及其自动化,080601,exact,
+*,数据科学与大数据技术,080910T,exact,
+*,网络空间安全,080904K,exact,投档表可能写作信息安全；展示用投档原文
+*,信息安全,080904K,exact,同网络空间安全（投档原文可能为信息安全）
+*,机器人工程,080803T,exact,
+*,机械设计制造及其自动化,080202,exact,
+*,能源与动力工程,080501,exact,
+*,新能源科学与工程*,080503T,exact,
+*,化学工程与工艺*,081301,exact,
+*,环境工程,082502,exact,
+*,土木工程,081001,exact,
+*,计算机类*,080901|080902,category,按计算机类投档
+*,电子信息类*,080701|080703,category,按电子信息类投档
+*,自动化类*,080801,category,按自动化类投档
+*,电气*实验班*,080601,category,按××投档
+*,能源动力类（电气*）*,080601,category,按××投档
+H213,工科试验班*计算机*,080901|080902|080701|080717T,category,按××投档
+H213,工科试验班*电子通信*,080901|080902|080701|080717T,category,按××投档
+H213,工科试验班*未来信息*,080901|080902|080701|080717T,category,按××投档
+H213,工科试验班*AI*,080901|080902|080701|080717T,category,按××投档
+H213,工科试验班*电气*自动化*,080601|080801,category,按××投档
+H213,工科试验班*机器人*,080803T,category,按××投档

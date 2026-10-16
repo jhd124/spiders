@@ -66,7 +66,8 @@
     "test:gwy": "tsx --test GWY/test/*.test.ts",
     "gaokao:sd-toudang": "tsx GAOKAO/ingest.ts",
     "test:gaokao": "tsx --test GAOKAO/test/*.test.ts",
-    "gaokao:export-pilot-majors": "tsx GAOKAO/export_pilot_majors.ts"
+    "gaokao:export-pilot-majors": "tsx GAOKAO/export_pilot_majors.ts",
+    "gaokao:map": "tsx GAOKAO/apply_map.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
