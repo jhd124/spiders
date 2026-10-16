@@ -5,8 +5,21 @@
 # major_code  one or more MOE codes, '|'-separated; 6-digit majors and 4-digit 专业类 / 2-digit 门类 are expanded to their
 #             本科 majors for counts; prefix grad:/undergrad: to mix catalogs, e.g. undergrad:1202|grad:1202
 # match_type  exact | category | unlimited | related | unresolved
+# context     optional: the rule applies only when this phrase is listed alongside (统计 with 数学)
+# major_code  a leading - subtracts (0201|-020102 = 经济学类 without 经济统计学); a rule also matches the phrase head without
+#             its bracket / 专业 suffix, and a 不含 bracket then subtracts the excluded items found in the catalog
 # source      provenance, e.g. 专家规则. A position's 备注 that lists the majors a phrase includes overrides the rule.
 # MOE catalogs only (本科专业目录 / 研究生教育学科专业目录); never training-company category lists.
-phrase,level,catalog,major_code,match_type,note,reviewer,source
-财会审计类,any,,120203K|120204|120207|120208|120213T|grad:120201|grad:1253|grad:0257,category,国考自定义类别；grad:120201（原二级学科会计学）、grad:0257 不在2022研究生目录中（code_doubtful）,expert,专家规则
-社会保障类,any,,120403|120401|020303|030302|grad:120404|grad:0352,category,国考自定义类别；grad:120404（原二级学科社会保障）不在2022研究生目录中（code_doubtful）,expert,专家规则
+phrase,level,catalog,major_code,match_type,note,reviewer,source,context
+财会审计类,any,,120203K|120204|120207|120208|120213T|grad:1202|grad:1253|grad:1257,category,国考自定义类别；研究生 1202工商管理学+1253会计+1257审计（原 grad:120201→1202+1253，grad:0257→1257）,expert,专家规则,
+社会保障类,any,,120403|120401|020303|030302|grad:1204|grad:0352,category,国考自定义类别；研究生 1204公共管理学（原 grad:120404）+0352社会工作,expert,专家规则,
+财会类专业（会计、审计、财务管理等专业）,any,,120203K|120204|120207|120208|120213T|grad:1202|grad:1253|grad:1257,category,同 财会审计类,expert,专家规则,
+英语相关专业,any,,050201|050261|050262,exact,英语、翻译、商务英语,expert,专家规则,
+经济金融类,any,,0201|-020102|0202|0203,category,经济学类（不含经济统计学）+财政学类+金融学类，不含经济与贸易类0204；所有变体（经济金融类专业、带不含/代码括号）同此，不含括号中能对上目录的再扣除,expert,专家规则,
+统计,any,,0701|0712|grad:0701|grad:0714,category,仅当与“数学”并列（数学、统计）；本科数学类+统计学类（含应用统计学，不含经济统计学020102），研究生0701数学+0714统计学,expert,专家规则,数学
+数学,any,,0701|grad:0701,category,本科数学类，研究生0701数学（与“数学、统计”一致）,expert,专家规则,
+理工科专业,any,,07|08,category,理学+工学门类,expert,专家规则,
+理工科,any,,07|08,category,同 理工科专业,expert,专家规则,
+会计（学）,any,,120203K|grad:1253,exact,本科会计学，研究生1253会计,expert,专家规则,
+审计（学）,any,,120207|grad:1257,exact,本科审计学，研究生1257审计,expert,专家规则,
+工商管理学（不含市场营销、人力资源管理、物流管理）,any,,grad:1202|grad:1251,category,研究生 1202工商管理学（+1251工商管理）,expert,专家规则,

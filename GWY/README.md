@@ -35,3 +35,11 @@ Segmentation (2026-10-16): segments end at 。；; or a level marker — 以(大
 (开头 = prefix); 「0301法学类（法学）」 restricts a 本科 class to the named majors; 「XX类（不含A、B）」 is the class minus A, B
 (unknown items → unresolved); 「XX门类」 is the category; 「XX类」 where XX is a catalog name matches XX, flagged
 code_doubtful. A trailing 专业 is dropped. Exact names only — never substring matches.
+
+Top-50 rulings (2026-10-16): rules carry `context` (统计 only with 数学) and `-code` subtraction; a rule also matches the
+phrase head, and its 不含 bracket subtracts what the catalog knows. Unknown exclusions are ignored and flagged
+`exclusions_partial` (排除项未全部对上). Old 研究生 二级学科 / 专业领域 names map to 2022 parents via
+GWY/rules/grad_legacy_map.csv (1997 目录 from moe.gov.cn + expert rows ★ + proposals ？, all reviewed=0; `via = legacy`).
+研究生 bracket directions: 「1202工商管理学（会计学…）」 = head ∪ items, 「08工学（专业应为…）」 = the listed items.
+Positions with ≥1 matched major count for those majors (majors_incomplete = 部分专业要求未归类); only positions with no
+match are absent from gwy_position_undergrad_major (stats: undergrad.positions_no_match).

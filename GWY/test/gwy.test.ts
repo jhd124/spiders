@@ -131,10 +131,11 @@ test('expert rules file: 财会审计类 / 社会保障类 with source 专家规
   assert.equal(byPhrase['财会审计类']!.source, '专家规则'); assert.equal(byPhrase['社会保障类']!.source, '专家规则');
   const rules = rows.map((r, i) => ({ id: i + 1, source: r.source, phrase: r.phrase!, level: r.level as 'any', catalog: (r.catalog || null) as null, major_code: r.major_code!, match_type: r.match_type as 'category' }));
   const c2: Catalogs = { ...cat, majors: new Map([...cat.majors, ['120203K', '会计学'], ['120204', '财务管理'], ['120207', '审计学'], ['120208', '资产评估'], ['120213T', '财务会计教育'], ['120403', '劳动与社会保障'], ['120401', '公共事业管理'], ['020303', '保险学'], ['030302', '社会工作']]),
-    grad: new Map([...cat.grad, ['1253', '会计'], ['0352', '社会工作']]) };
+    grad: new Map([...cat.grad, ['1253', '会计'], ['1257', '审计'], ['1202', '工商管理学'], ['1204', '公共管理学'], ['0352', '社会工作']]) };
   const a = matchPhrase('财会审计类', 'any', c2, rules, 'any');
-  assert.deepEqual([a.rule_id, a.match_type, a.code_doubtful, a.undergrad_majors], [1, 'category', 1, ['120203K', '120204', '120207', '120208', '120213T']]);
-  assert.match(a.major_code!, /grad:120201\|grad:1253\|grad:0257$/);
+  assert.deepEqual([a.rule_id, a.match_type, a.code_doubtful, a.undergrad_majors], [1, 'category', 0, ['120203K', '120204', '120207', '120208', '120213T']]);
+  assert.match(a.major_code!, /grad:1202\|grad:1253\|grad:1257$/);
+  assert.match(matchPhrase('社会保障类', 'any', c2, rules, 'any').major_code!, /grad:1204\|grad:0352$/);
   assert.deepEqual(matchPhrase('社会保障类', 'any', c2, rules, 'any').undergrad_majors, ['020303', '030302', '120401', '120403']);
   assert.deepEqual(matchPhrase('财会审计类', 'any', c2, rules, 'grad').undergrad_majors, [], '研究生 segment never feeds 本科 counts');
 });
@@ -184,7 +185,7 @@ test('crawler reads the default data/civil-service zip; ingest stores notice, po
   assert.equal(r.positions, 4); assert.equal(r.hires, 11);
   assert.deepEqual(r.by_type, { exact: 2, category: 1, unlimited: 0, related: 1, unresolved: 2 });
   assert.equal(r.positions_all_resolved, 2);
-  assert.deepEqual(r.undergrad, { positions: 3, hires: 6, positions_with_match: 1, hires_with_match: 2, position_majors: 2, distinct_majors: 2, positions_incomplete: 2, hires_incomplete: 4 });
+  assert.deepEqual(r.undergrad, { positions: 3, hires: 6, positions_with_match: 1, hires_with_match: 2, position_majors: 2, distinct_majors: 2, positions_incomplete: 0, hires_incomplete: 0, positions_no_match: 2, hires_no_match: 4 });
   assert.deepEqual(r.remarks_override, { applied: 0, unparsed: 0 });
   assert.deepEqual(r.needs_grad, { positions: 1, hires: 5, positions_with_match: 1, hires_with_match: 5 });
   assert.deepEqual(r.unresolved.map((u) => [u.phrase, u.positions, u.hires]), [['人工智能工程', 2, 4], ['计算机相关专业', 1, 3]]);
@@ -234,13 +235,14 @@ test('bracket qualifiers: code syntax, sub-restriction, exclusion, 门类, XX类
   assert.deepEqual(q('0301法学类（法学）', 'undergrad'), ['exact', '030101K', 0], 'restricted to the named major');
   assert.deepEqual(q('（0301法学类（法学）', 'undergrad'), ['exact', '030101K', 0], 'stray opening bracket');
   assert.deepEqual(q('计算机类（不含软件工程、数据科学与大数据技术）', 'undergrad'), ['exact', '080901', 0], 'class minus excluded');
-  assert.equal(q('计算机类（不含量子玄学）', 'undergrad')[0], 'unresolved', 'unknown exclusion → not guessed');
-  assert.equal(q('1202工商管理学（会计学、财务管理、审计学）', 'grad')[0], 'unresolved', '研究生 二级学科 list not in our catalog');
+  assert.deepEqual(q('计算机类（不含量子玄学）', 'undergrad'), ['exact', '080901|080902|080910T', 0], 'unknown exclusion ignored (flagged exclusions_partial)');
+  assert.equal(matchPhrase('计算机类（不含量子玄学）', 'undergrad', c3).exclusions_partial, 1);
+  assert.equal(q('1202工商管理学（会计学、财务管理、审计学）', 'grad')[0], 'unresolved', 'without the legacy map the 二级学科 list does not resolve');
   assert.deepEqual(q('02经济学门类', 'grad'), ['category', '02', 0]);
   assert.deepEqual(q('法学门类', 'undergrad'), ['category', '03', 0]);
   assert.deepEqual(q('计算机科学与技术类', 'grad'), ['exact', '0812', 1], 'XX类 → catalog name XX, flagged');
   assert.equal(q('计算机科学与技术等相关专业')[0], 'related');
-  assert.equal(q('经济学类（不含统计等专业）')[0], 'unresolved', '「等专业」 inside an exclusion is not 「相关」; 经济学类 absent here');
+  assert.deepEqual(q('经济学类（不含统计等专业）'), ['category', '02', 0], '「等专业」 inside an exclusion is not 「相关」; only the 研究生 门类 here');
   // no substring matching: 法学 never yields 书法学, 工学 never 医工学
   assert.deepEqual(q('法学', 'undergrad'), ['exact', '030101K', 0]);
   assert.equal(q('书法', 'undergrad')[0], 'unresolved');
@@ -258,4 +260,65 @@ test('more markers and qualifiers: 本科为/研究生为, 本科或研究生为
 
 test('code syntax with 仅限', () => {
   assert.deepEqual(m('法学（仅限专业代码030101K）', 'undergrad'), ['undergrad', '030101K', 'exact', 0]);
+});
+
+const c4: Catalogs = {
+  majors: new Map([['020101', '经济学'], ['020102', '经济统计学'], ['020201K', '财政学'], ['020301K', '金融学'], ['020401', '国际经济与贸易'], ['120208', '资产评估'], ['070101', '数学与应用数学'], ['071201', '统计学'], ['071202', '应用统计学'], ['050201', '英语'], ['030101K', '法学'], ['080901', '计算机科学与技术'], ['080902', '软件工程']]),
+  classes: new Map([['0201', '经济学类'], ['0202', '财政学类'], ['0203', '金融学类'], ['0204', '经济与贸易类'], ['0701', '数学类'], ['0712', '统计学类'], ['0301', '法学类'], ['0302', '政治学类'], ['0809', '计算机类']]),
+  ugCategories: new Map([['07', '理学'], ['08', '工学']]),
+  grad: new Map([['0202', '应用经济学'], ['0251', '金融'], ['0255', '保险'], ['0301', '法学'], ['1202', '工商管理学'], ['1253', '会计'], ['1257', '审计'], ['0812', '计算机科学与技术'], ['0835', '软件工程'], ['0854', '电子信息'], ['08', '工学']]),
+  gradLegacy: new Map([['民商法学', ['0301']], ['会计学', ['1202', '1253']], ['审计学', ['1202', '1257']], ['财务管理', ['1202']], ['计算机技术', ['0854', '0812']], ['计算机系统结构', ['0812']]]),
+};
+const R4 = (async () => {
+  const { RULES_CSV } = await import('../ingest.js');
+  return parseCsv(readFileSync(RULES_CSV, 'utf8')).map((r, i) => ({ id: i + 1, source: r.source, context: r.context || null, phrase: r.phrase!, level: (r.level || 'any') as 'any', catalog: (r.catalog || null) as null, major_code: r.major_code!, match_type: r.match_type as 'category' }));
+})();
+
+test('top-50 rulings A: 英语相关专业, 经济金融类 variants, 数学、统计, 理工科, 会计（学）', async () => {
+  const rules = await R4;
+  const u = (p: string, seg: 'any' | 'undergrad' | 'grad' = 'undergrad', sib: string[] = []) => matchPhrase(p, 'any', c4, rules, seg, sib);
+  assert.deepEqual(u('经济金融类').undergrad_majors, ['020101', '020201K', '020301K'], '0201 minus 020102, + 0202 + 0203, not 0204');
+  assert.deepEqual(u('经济金融类专业（不含统计、国际商务、资产评估、经济与贸易类、国际贸易等专业）').undergrad_majors, ['020101', '020201K', '020301K']);
+  assert.equal(u('经济金融类专业（不含统计、国际商务、资产评估、经济与贸易类、国际贸易等专业）').exclusions_partial, 1, '统计 / 国际贸易 not catalog names');
+  assert.deepEqual(u('经济金融类（专业代码0201、0202、0203、0204开头）').undergrad_majors, ['020101', '020201K', '020301K']);
+  const [m1, s1] = matchMajors('数学、统计', c4, rules, '本科及以上');
+  assert.deepEqual(s1!.undergrad_majors, ['070101', '071201', '071202']);
+  assert.match(s1!.major_code!, /grad:0701\|grad:0714/);
+  assert.deepEqual(m1!.undergrad_majors, ['070101']);
+  assert.equal(matchMajors('统计', c4, rules, '本科及以上')[0]!.match_type, 'unresolved', 'standalone 统计 stays for the expert');
+  assert.deepEqual(u('理工科专业').major_code, '07|08');
+  assert.deepEqual([u('会计（学）').major_code, u('会计（学）', 'grad').undergrad_majors], ['undergrad:120203K|grad:1253', []]);
+  assert.deepEqual(u('英语相关专业').major_code, '050201|050261|050262');
+  assert.deepEqual(u('法学类（不含政治学类、社会学类、民族学类）').undergrad_majors, ['030101K'], 'excluded classes outside 法学类: = 0301');
+});
+
+test('top-50 rulings B/C: legacy 二级学科 → 2022 parent; 研究生 bracket directions', () => {
+  const g = (p: string) => { const r = matchPhrase(p, 'grad', c4); return [r.major_code, r.via, r.exclusions_partial]; };
+  assert.deepEqual(g('民商法学'), ['0301', 'legacy', 0]);
+  assert.deepEqual(g('计算机技术'), ['0854|0812', 'legacy', 0], 'professional field → 0854 + 0812');
+  assert.deepEqual(matchPhrase('民商法学', 'undergrad', c4).undergrad_majors, [], 'legacy is 研究生 only; never a 本科 major');
+  assert.deepEqual(g('1202工商管理学（会计学、财务管理、审计学）')[0], '1202|1253|1257');
+  assert.deepEqual(g('1202工商管理学（会计学）')[0], '1202|1253');
+  assert.deepEqual(g('0202应用经济学（金融、保险等相关专业）'), ['0202|0251|0255', 'catalog', 1]);
+  assert.deepEqual(g('0301法学（法学、民商法学）')[0], '0301');
+  assert.deepEqual(g('08工学（专业应为计算机科学与技术、计算机系统结构、软件工程、人工智能等相关专业）'), ['0812|0835', 'catalog', 1], 'listed disciplines only, not all of 08');
+});
+
+test('ruling D: a position with ≥1 matched major counts, flagged 部分专业要求未归类', async () => {
+  const rules = await R4;
+  const ms = matchMajors('计算机类、量子玄学', c4, rules, '本科及以上');
+  assert.deepEqual(ms.map((m) => [m.match_type, m.undergrad_majors.length]), [['category', 2], ['unresolved', 0]]);
+});
+
+test('备注 defining a phrase by code (法学专业指学科代码0301下设专业) is not an unparseable list', () => {
+  const rem = '法学专业指学科代码0301下设专业、法律专业指学科代码0351下设法律（法学、非法学）专业；工作强度较大';
+  assert.deepEqual(remarksList('法学', rem), ['0301法学']);
+  const ms = matchMajors('法学、法律', cat, [], '仅限硕士研究生', rem);
+  assert.deepEqual(ms.map((m) => [m.major_code, m.remarks_override]), [['0301', 1], ['0351', 1]]);
+});
+
+test('或研究生： / space before 硕士研究生： / X除外', () => {
+  assert.deepEqual(splitMajors('本科：0301法学类；或研究生：0301法学').map((x) => `${x.level}:${x.phrase}`), ['undergrad:0301法学类', 'grad:0301法学']);
+  assert.deepEqual(splitMajors('经济学门类（02） 硕士研究生：经济学（02）').map((x) => `${x.level}:${x.phrase}`), ['any:经济学门类（02）', 'grad:经济学（02）']);
+  assert.deepEqual(matchPhrase('0809计算机类（软件工程除外）', 'undergrad', cat).undergrad_majors, ['080901', '080910T']);
 });

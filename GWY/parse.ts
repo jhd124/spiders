@@ -114,8 +114,10 @@ export interface Catalogs {
   ugCategories?: Map<string, string>;
   /** 研究生: code → name (门类 2 digits, 一级学科/专业学位类别 4 digits) */
   grad: Map<string, string>;
+  /** old 研究生 二级学科 / 专业领域 name → 2022 一级学科/专业学位类别 code(s) (GWY/rules/grad_legacy_map.csv) */
+  gradLegacy?: Map<string, string[]>;
 }
-export interface Rule { id: number; source?: string | null; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
+export interface Rule { id: number; source?: string | null; context?: string | null; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
 export interface Target { catalog: 'undergrad' | 'grad'; code: string; kind: 'major' | 'class' | 'category' | 'discipline' }
 export interface Match {
   seq: number; level: Level; phrase: string;
@@ -129,6 +131,10 @@ export interface Match {
   undergrad_majors: string[];
   /** 0 none; 1 the position's 备注 listed this phrase's majors and they were used; 2 detected but unparseable → unresolved */
   remarks_override?: 0 | 1 | 2;
+  /** 1 = some excluded / listed sub-items (不含… / 专业应为…) were not found in the catalog and were ignored (排除项未全部对上) */
+  exclusions_partial?: number;
+  /** how it matched: rule | legacy (旧二级学科 → 2022 parent) | catalog | remarks */
+  via?: 'rule' | 'legacy' | 'catalog' | 'remarks' | null;
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -139,6 +145,9 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export function remarksList(phrase: string, remarks: string): string[] | null {
   const name = splitCodes(phrase).name;
   if (!name || !remarks || !remarks.includes(name)) return null;
+  // 「法学专业指学科代码0301下设专业」: a definition by code, not a list → the code with the phrase name
+  const byCode = remarks.match(new RegExp(`${esc(name)}(?:专业)?(?:是指|指|为)(?:学科|专业)?代码(?:为)?(\\d{2,6}[A-Z]{0,2})(?:下设|开头|的)`));
+  if (byCode) return [`${byCode[1]}${name}`];
   const m = remarks.match(new RegExp(`${esc(name)}(?:专业)?(?:[（(](?:包括|包含|含|指|即)[:：]?([^）)]*)[）)]|(?:包括|包含|含|是指|指|为|即)[:：]?([^。；;\n]*))`));
   if (!m) return null;
   const list = (m[1] ?? m[2] ?? '').replace(/等(?:专业)?$|专业$/, '');
@@ -152,8 +161,8 @@ const LEVEL_PREFIX: [RegExp, Level][] = [
   [/^(?:或|且)?以(?:硕士|博士)?研究生(?:专业)?报考[:：]?/, 'grad'],
   [/^(?:或|且)?(?:大学)?本科(?:生)?(?:专业)?(?:为|招收)[:：]?/, 'undergrad'],
   [/^(?:或|且)?(?:硕士|博士)?研究生(?:专业)?(?:为|招收)[:：]?/, 'grad'],
-  [/^(?:大学本科|本科|学士)(?:专业)?[:：]/, 'undergrad'],
-  [/^(?:硕士研究生|博士研究生|研究生|硕士|博士)(?:专业)?[:：]/, 'grad'],
+  [/^(?:或|且)?(?:大学本科|本科|学士)(?:专业)?[:：]/, 'undergrad'],
+  [/^(?:或|且)?(?:硕士研究生|博士研究生|研究生|硕士|博士)(?:专业)?[:：]/, 'grad'],
   [/^大学本科(?=\d)/, 'undergrad'],
   [/^(?:硕士)?研究生(?=\d)/, 'grad'],
 ];
@@ -181,7 +190,8 @@ export function splitMajors(text: string): { level: Level; phrase: string }[] {
   const t = text.replace(/\s*\n\s*/g, '；')
     .replace(/(?<!本科)[，,]*\s*(?=(?:或|且)(?:以)?(?:大学)?(?:本科|(?:硕士|博士)?研究生))/g, '；')
     .replace(/[，,]+\s*(?=(?:大学)?(?:本科|(?:硕士|博士)?研究生)(?:生)?(?:专业)?(?:为|招收|[:：]))/g, '；')
-    .replace(/[，,]+\s*(?=以(?:大学)?(?:本科|研究生))/g, '；');
+    .replace(/[，,]+\s*(?=以(?:大学)?(?:本科|研究生))/g, '；')
+    .replace(/\s+(?=(?:大学本科|本科|硕士研究生|博士研究生|研究生)(?:专业)?[:：])/g, '；');
   let level: Level = 'any';
   for (let part of splitTop(t, '；;。')) {
     if (/^[（(].*[）)]$/.test(part) && out.length && !/^[（(]\s*\d/.test(part)) { out[out.length - 1]!.phrase += part; continue; }
@@ -241,27 +251,58 @@ function ruleTarget(code: string, catalog: Rule['catalog'], cat: Catalogs): Targ
  *  - several codes with one name: every code whose catalog name equals the name counts; the rest are doubtful
  *  - 不限 → unlimited; 相关/相近/等专业 → related (report); no catalog name → unresolved (report)
  */
-export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: Rule[] = [], segment: Level = level): Omit<Match, 'seq'> {
+export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: Rule[] = [], segment: Level = level, siblings: string[] = []): Omit<Match, 'seq'> {
   const seg: Level = level !== 'any' ? level : segment;
-  const out = (targets: Target[], match_type: MatchType, code_doubtful = 0, rule_id: number | null = null): Omit<Match, 'seq'> => {
+  const out = (targets: Target[], match_type: MatchType, code_doubtful = 0, rule_id: number | null = null, extra: { exclusions_partial?: number; via?: Match['via'] } = {}): Omit<Match, 'seq'> => {
     const cats = [...new Set(targets.map((t) => t.catalog))];
     return {
       level, phrase, segment: seg, match_type, rule_id, code_doubtful, targets,
       catalog: cats.length === 1 ? cats[0]! : null,
       major_code: targets.length ? targets.map((t) => (cats.length > 1 ? `${t.catalog}:${t.code}` : t.code)).join('|') : null,
       undergrad_majors: seg === 'grad' ? [] : [...new Set(targets.flatMap((t) => expandUndergrad(t, cat)))].sort(),
+      exclusions_partial: extra.exclusions_partial ?? 0, via: extra.via ?? (targets.length ? 'catalog' : null),
     };
   };
-  const r = rules.find((x) => x.phrase === phrase && (x.level === level || x.level === 'any'));
+  const { head: h0, q: q0 } = splitQualifier(phrase);
+  const headName = splitCodes(h0).name.replace(/(?<=.{2})专业$/, '');
+  const ruleFor = (key: string) => rules.find((x) => x.phrase === key && (x.level === level || x.level === 'any') && (!x.context || siblings.includes(x.context)));
+  // exact phrase first; else the phrase head without its bracket / 专业 suffix (「经济金融类专业（不含…）」 → 经济金融类)
+  const r = ruleFor(phrase) ?? ruleFor(h0) ?? ruleFor(headName);
   if (r) {
-    const ts = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean).map((c) => ruleTarget(c, r.catalog, cat));
-    return out(ts.map(({ known: _k, ...t }) => t), r.match_type, ts.some((t) => !t.known) ? 1 : 0, r.id);
+    const codes = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean);
+    const ts = codes.filter((c) => !c.startsWith('-')).map((c) => ruleTarget(c, r.catalog, cat));
+    let targets: Target[] = ts.map(({ known: _k, ...t }) => t);
+    let partial = 0;
+    const minus = codes.filter((c) => c.startsWith('-')).map((c) => c.slice(1));
+    const exclude = r.phrase !== phrase && q0?.kind === 'exclude' ? q0.items : [];
+    if (minus.length || exclude.length) {
+      const sub = subtractUndergrad(targets, minus, exclude, cat);
+      targets = sub.targets; partial = sub.partial;
+    }
+    return out(targets, r.match_type, ts.some((t) => !t.known) ? 1 : 0, r.id, { exclusions_partial: partial, via: 'rule' });
   }
   if (UNLIMITED.test(splitCodes(phrase).name)) return out([], 'unlimited');
-  const { head: h0, q: q0 } = splitQualifier(phrase);
-  if (RELATED.test(h0) || (q0?.kind === 'include' && RELATED.test(phrase.slice(h0.length)))) return out([], 'related');
+  if (RELATED.test(h0)) return out([], 'related');
   const r2 = matchName(phrase, seg, cat);
-  return r2 ? out(r2.targets, r2.targets.every((t) => t.kind !== 'major' && t.kind !== 'discipline') ? 'category' : 'exact', r2.doubtful) : out([], 'unresolved');
+  if (!r2 && q0?.kind === 'include' && RELATED.test(phrase.slice(h0.length))) return out([], 'related');
+  return r2 ? out(r2.targets, r2.targets.every((t) => t.kind !== 'major' && t.kind !== 'discipline') ? 'category' : 'exact', r2.doubtful, null, { exclusions_partial: r2.partial, via: r2.via }) : out([], 'unresolved');
+}
+
+/** 本科 targets → their majors minus codes (base / prefix) and minus named exclusions found in the catalog */
+export function subtractUndergrad(targets: Target[], minusCodes: string[], excludeNames: string[], cat: Catalogs): { targets: Target[]; partial: number } {
+  const ug = targets.filter((t) => t.catalog === 'undergrad');
+  const pool = new Set(ug.flatMap((t) => expandUndergrad(t, cat)));
+  let partial = 0;
+  for (const c of minusCodes) for (const m of [...pool]) if (m === c || base(m) === base(c) || m.startsWith(c)) pool.delete(m);
+  for (const it of excludeNames) {
+    const { codes: ic, name } = splitCodes(it);
+    const n = name.replace(/(?<=.{2})专业$/, '');
+    const hit = [...cat.majors.keys()].filter((c) => cat.majors.get(c) === n || ic.some((x) => base(c) === base(x)))
+      .concat(byName(cat.classes, n).flatMap((k) => [...cat.majors.keys()].filter((c) => c.startsWith(k))));
+    if (!hit.length) { partial = 1; continue; } // not in the catalog: ignored, flagged (排除项未全部对上)
+    for (const h of hit) pool.delete(h);
+  }
+  return { targets: [...[...pool].sort().map((code): Target => ({ catalog: 'undergrad', code, kind: 'major' })), ...targets.filter((t) => t.catalog === 'grad')], partial };
 }
 
 const agrees = (t: Target, c: string, prefix = false) => t.code === c || base(t.code) === c || (prefix && (t.code.startsWith(c) || c.startsWith(t.code)));
@@ -288,6 +329,10 @@ function lookupName(name: string, codes: string[], ug: boolean, grad: boolean, c
   }
   return cands;
 }
+/** old 二级学科 / 专业领域 name → 2022 parent(s) */
+function legacyTargets(name: string, cat: Catalogs): Target[] {
+  return (cat.gradLegacy?.get(name) ?? []).map((code): Target => ({ catalog: 'grad', code, kind: code.length === 2 ? 'category' : 'discipline' }));
+}
 
 interface Qualifier { kind: 'codes' | 'exclude' | 'include'; codes: string[]; prefix: boolean; items: string[] }
 /** trailing bracket of a phrase: 「（专业代码0809开头）」「（不含A、B）」「（法学）」「（会计学、财务管理）」 */
@@ -306,14 +351,14 @@ export function splitQualifier(phrase: string): { head: string; q: Qualifier | n
   }
   const cm = body.match(/^(?:仅限|限)?(?:专业代码?为?|代码为?)?[:：]?\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/及和]?\s*)+)(开头)?(?:的?专业)?$/);
   if (cm) return { head, q: { kind: 'codes', codes: cm[1]!.match(CODE) ?? [], prefix: !!cm[2], items: [] } };
-  const items = (b: string) => b.split(/[、，,]/).map((x) => x.trim().replace(/(?:等)?专业$/, '').replace(/^(?:含|包括)/, '')).filter(Boolean);
-  const ex = body.match(/^(?:不含|不包括|除)(.*?)(?:等?专业)?(?:以?外)?$/);
+  const items = (b: string) => b.split(/[、，,]/).map((x) => x.trim().replace(/(?:等)?(?:相关|相近)?(?:的)?(?:专业)?$/, '').replace(/^(?:含|包括)/, '')).filter(Boolean);
+  const ex = body.match(/^(?:不含|不包括|除)(.*?)(?:等?专业)?(?:以?外)?$/) ?? body.match(/^(.*?)(?:等?专业)?除外$/);
   if (ex) return { head, q: { kind: 'exclude', codes: [], prefix: false, items: items(ex[1]!) } };
   return { head, q: { kind: 'include', codes: [], prefix: false, items: items(body.replace(/^(?:专业应为|专业为|含|包括|限|即|仅限)[:：]?/, '')) } };
 }
 
 /** name (+ printed codes, + bracket qualifier) → targets. null = unresolved. Exact names / classes / codes only. */
-function matchName(phrase: string, seg: Level, cat: Catalogs): { targets: Target[]; doubtful: number } | null {
+function matchName(phrase: string, seg: Level, cat: Catalogs): { targets: Target[]; doubtful: number; partial: number; via: Match['via'] } | null {
   const { head, q } = splitQualifier(phrase);
   const { codes: printed, name: n0 } = splitCodes(head);
   const name = n0.replace(/(?<=.{2})专业$/, ''); // 「财务会计教育专业」→ 财务会计教育 (exact name still required)
@@ -322,8 +367,15 @@ function matchName(phrase: string, seg: Level, cat: Catalogs): { targets: Target
   const lookup = (ug: boolean, grad: boolean) => lookupName(name, codes, ug, grad, cat);
   let cands = lookup(seg !== 'grad', seg !== 'undergrad');
   let doubtful = 0;
+  let via: Match['via'] = 'catalog';
+  // old 研究生 二级学科 name (民商法学 → 0301): its 2022 parent; only where 研究生 applies
+  if (!cands.length && seg !== 'undergrad') { cands = legacyTargets(name, cat); if (cands.length) via = 'legacy'; }
   // the name exists only in the other catalog (120401行政管理 for a 硕士 position → 本科 120402): name wins, flagged
-  if (!cands.length && seg !== 'any') { cands = lookup(seg === 'grad', seg === 'undergrad'); doubtful = cands.length ? 1 : 0; }
+  if (!cands.length && seg !== 'any') {
+    cands = lookup(seg === 'grad', seg === 'undergrad');
+    if (!cands.length && seg === 'undergrad') { cands = legacyTargets(name, cat); if (cands.length) via = 'legacy'; }
+    doubtful = cands.length ? 1 : 0;
+  }
   // 「计算机科学与技术类」: XX类 where XX is a catalog name (研究生 0812 / 本科 080901) — matched, flagged as unsure
   if (!cands.length && /类$/.test(name)) {
     const bare = name.replace(/类$/, '');
@@ -331,36 +383,54 @@ function matchName(phrase: string, seg: Level, cat: Catalogs): { targets: Target
     doubtful = cands.length ? 1 : 0;
   }
   if (!cands.length) return null;
-  if (codes.length) {
+  if (codes.length && via !== 'legacy') {
     const hit = cands.filter((t) => codes.some((c) => agrees(t, c, prefix)));
     if (hit.length) cands = hit; // codes pick among same-name entries (食品科学与工程: 0832 研究生 vs 082701 本科)
     if (codes.some((c) => !cands.some((t) => agrees(t, c, prefix)))) doubtful = 1;
   }
-  if (!q || q.kind === 'codes') return { targets: cands, doubtful };
-  // sub-restriction inside a 本科 class/category: only named majors of it (include) or all but the named ones (exclude)
+  if (!q || q.kind === 'codes') return { targets: cands, doubtful, partial: 0, via };
+  if (q.kind === 'exclude') {
+    // 「XX类（不含A、B）」: the class minus the exclusions found in the catalog; unknown ones are ignored and flagged
+    if (!cands.some((t) => t.catalog === 'undergrad' && t.kind !== 'major')) return { targets: cands, doubtful, partial: 1, via };
+    const sub = subtractUndergrad(cands, [], q.items, cat);
+    return sub.targets.length ? { targets: sub.targets, doubtful, partial: sub.partial, via } : null;
+  }
+  // include list
+  const gradT = cands.filter((t) => t.catalog === 'grad');
+  if (gradT.length === cands.length) {
+    // 研究生 head with listed directions: 「1202工商管理学（会计学…）」= head ∪ items, 「08工学（专业应为…）」= the listed items only
+    const items = q.items.map((it) => { const n = splitCodes(it).name.replace(/(?<=.{2})专业$/, ''); const t = lookupName(n, [], false, true, cat); return t.length ? t : legacyTargets(n, cat); });
+    const found = items.flat();
+    const partial = items.some((x) => !x.length) || RELATED.test(phrase.slice(head.length)) ? 1 : 0;
+    const headKeep = gradT.filter((t) => t.kind === 'discipline');
+    const all = [...headKeep, ...found].filter((t, i, a) => a.findIndex((x) => x.code === t.code) === i);
+    return all.length ? { targets: all, doubtful, partial, via } : null;
+  }
+  // sub-restriction inside a 本科 class/category: only the named majors of it
   const ugT = cands.filter((t) => t.catalog === 'undergrad' && t.kind !== 'major');
-  if (!ugT.length || ugT.length !== cands.length) return null; // 研究生 二级学科 lists etc.: not in our catalogs → unresolved
+  if (!ugT.length || ugT.length !== cands.length) return null;
   const pool = [...new Set(ugT.flatMap((t) => expandUndergrad(t, cat)))];
-  const resolve = (it: string): string[] | null => {
+  const resolve = (it: string): string[] => {
     const { codes: ic, name: n } = splitCodes(it);
     const m = pool.filter((c) => cat.majors.get(c) === n || ic.some((x) => base(c) === base(x)));
     const cl = byName(cat.classes, n).flatMap((k) => pool.filter((c) => c.startsWith(k)));
-    const all = [...new Set([...m, ...cl])];
-    return all.length ? all : null;
+    return [...new Set([...m, ...cl])];
   };
   const parts = q.items.map(resolve);
-  if (!parts.length || parts.some((x) => !x)) return null;
-  const named = new Set(parts.flat() as string[]);
-  const keep = q.kind === 'include' ? pool.filter((c) => named.has(c)) : pool.filter((c) => !named.has(c));
+  const named = new Set(parts.flat());
+  const keep = pool.filter((c) => named.has(c));
   if (!keep.length) return null;
-  return { targets: keep.sort().map((code): Target => ({ catalog: 'undergrad', code, kind: 'major' })), doubtful };
+  const partial = parts.some((x) => !x.length) || RELATED.test(phrase.slice(head.length)) ? 1 : 0;
+  return { targets: keep.sort().map((code): Target => ({ catalog: 'undergrad', code, kind: 'major' })), doubtful, partial, via };
 }
 
 export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], education = '', remarks = ''): Match[] {
   const segment = segmentFor(education);
   if (!text.trim()) return [{ seq: 0, ...matchPhrase('', 'any', cat, [], segment), match_type: 'unresolved' }];
-  return splitMajors(text).map((x, seq) => {
-    const m: Match = { seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment), remarks_override: 0 };
+  const items = splitMajors(text);
+  const siblings = items.map((x) => splitCodes(x.phrase).name);
+  return items.map((x, seq) => {
+    const m: Match = { seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment, siblings), remarks_override: 0 };
     if (UNLIMITED.test(x.phrase)) return m;
     const items = remarksList(x.phrase, remarks);
     if (!items) return m;
@@ -372,7 +442,7 @@ export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], edu
     return { ...m, rule_id: null, targets, catalog: cats.length === 1 ? cats[0]! : null, code_doubtful: parts.some((p) => p.code_doubtful) ? 1 : 0,
       major_code: targets.map((t) => (cats.length > 1 ? `${t.catalog}:${t.code}` : t.code)).join('|'),
       match_type: parts.every((p) => p.match_type === 'category') ? 'category' : 'exact',
-      undergrad_majors: [...new Set(parts.flatMap((p) => p.undergrad_majors))].sort(), remarks_override: 1 };
+      undergrad_majors: [...new Set(parts.flatMap((p) => p.undergrad_majors))].sort(), remarks_override: 1, via: 'remarks' };
   });
 }
 
