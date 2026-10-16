@@ -1,0 +1,5 @@
+# Expert rules for 专业 phrases that the catalog matcher leaves unresolved / related.
+# phrase = one item of 专业 exactly as split by GWY (see data/civil-service/gk2027_unresolved_majors.csv)
+# level = any | undergrad | grad ; catalog = undergrad | grad | (empty) ; major_code = code(s), '|'-separated
+# match_type = exact | category | unlimited | related | unresolved ; reviewer = who decided
+phrase,level,catalog,major_code,match_type,note,reviewer

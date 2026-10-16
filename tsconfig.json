@@ -18,6 +18,7 @@
     "MOOC/**/*.ts",
     "CAREER/**/*.ts",
     "JOBS/**/*.ts",
+    "GWY/**/*.ts",
     "scripts/**/*.ts",
     "web/server/**/*.ts",
     "web/shared/**/*.ts",

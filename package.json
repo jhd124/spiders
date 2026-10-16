@@ -58,7 +58,12 @@
     "web:dev": "concurrently -k -n api,ui -c blue,magenta \"tsx watch --clear-screen=false web/server/index.ts\" \"vite --config web/vite.config.ts\"",
     "web:dev:student": "vite --config web/vite.student.config.ts",
     "web:build": "vite build --config web/vite.config.ts && vite build --config web/vite.student.config.ts",
-    "web:start": "tsx web/server/index.ts"
+    "web:start": "tsx web/server/index.ts",
+    "crawl:gwy-grad": "tsx GWY/grad_catalog/crawler.ts",
+    "crawl:gwy-gk2027": "tsx GWY/gk2027/crawler.ts",
+    "gwy:ingest": "tsx GWY/ingest.ts",
+    "gwy:all": "npm run crawl:gwy-grad && npm run crawl:gwy-gk2027 && npm run gwy:ingest",
+    "test:gwy": "tsx --test GWY/test/*.test.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
@@ -76,9 +81,11 @@
     "better-sqlite3": "^11.10.0",
     "cheerio": "^1.2.0",
     "hono": "^4.13.13",
+    "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "xlsx": "^0.18.5"
   }
 }
