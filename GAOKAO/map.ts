@@ -20,10 +20,12 @@ export interface MapRule {
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Unify fullwidth / halfwidth parentheses so 能源动力类（电气*） matches 能源动力类(电气…). */
+export const normParens = (s: string) => s.replace(/[（）]/g, (c) => (c === '（' || c === '(' ? '(' : ')'));
 
-/** Expert pattern → RegExp: each * → .* ; match full major_name_raw. */
+/** Expert pattern → RegExp: each * → .* ; match full major_name_raw (parens normalized). */
 export function patternToRegExp(pattern: string): RegExp {
-  const p = pattern.trim();
+  const p = normParens(pattern.trim());
   if (!p.includes('*')) return new RegExp(`^${escapeRe(p)}$`);
   return new RegExp(`^${p.split('*').map(escapeRe).join('.*')}$`);
 }
@@ -50,9 +52,10 @@ export function loadMapRules(path = MAP_CSV): MapRule[] {
 }
 
 export function matchRules(schoolCode: string, majorName: string, rules: MapRule[]): MapRule | null {
+  const name = normParens(majorName);
   for (const r of rules) {
     if (r.school_code && r.school_code !== schoolCode) continue;
-    if (patternToRegExp(r.name_pattern).test(majorName)) return r;
+    if (patternToRegExp(r.name_pattern).test(name)) return r;
   }
   return null;
 }

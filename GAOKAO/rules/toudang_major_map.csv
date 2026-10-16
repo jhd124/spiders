@@ -1,10 +1,13 @@
-# Expert first-batch 投档 major_name_raw → MOE major codes (2026-10-16).
+# Expert first-batch 投档 major_name_raw → MOE major codes (updated QA 2026-10-16).
 # school_code: empty or * = all pilots (A422/A425/H213); or a specific code
 # name_pattern: exact, prefix with trailing *, or multiple * wildcards
+# Parentheses in patterns/names are normalized: （） and () are equivalent.
 # major_codes: | -separated; match_type: exact | category
+# Do NOT map: 智能建造与智慧交通*工程机器人*, 生物医药数据科学, 大数据管理与应用, 未来智造, 先进材料与智能制造, 理工交叉
 school_code,name_pattern,major_codes,match_type,note
 *,计算机科学与技术,080901,exact,
 *,软件工程,080902,exact,
+*,工程软件,080902,exact,
 *,人工智能,080717T,exact,
 *,电子信息工程,080701,exact,
 *,通信工程,080703,exact,
@@ -24,10 +27,11 @@ school_code,name_pattern,major_codes,match_type,note
 *,电子信息类*,080701|080703,category,按电子信息类投档
 *,自动化类*,080801,category,按自动化类投档
 *,电气*实验班*,080601,category,按××投档
-*,能源动力类（电气*）*,080601,category,按××投档
-H213,工科试验班*计算机*,080901|080902|080701|080717T,category,按××投档
-H213,工科试验班*电子通信*,080901|080902|080701|080717T,category,按××投档
-H213,工科试验班*未来信息*,080901|080902|080701|080717T,category,按××投档
-H213,工科试验班*AI*,080901|080902|080701|080717T,category,按××投档
+*,能源动力类（电气*）*,080601,category,按××投档；半角()亦同
+H213,工科试验班*AI*,080901|080902|080701|080717T,category,含 AI / 人工智能 才加 080717T
+H213,工科试验班*人工智能*,080901|080902|080701|080717T,category,含 AI / 人工智能 才加 080717T
+H213,工科试验班*计算机*,080901|080902|080701,category,无 AI 不加 080717T
+H213,工科试验班*电子通信*,080901|080902|080701,category,无 AI 不加 080717T
+H213,工科试验班*未来信息*,080901|080902|080701,category,无 AI 不加 080717T
 H213,工科试验班*电气*自动化*,080601|080801,category,按××投档
-H213,工科试验班*机器人*,080803T,category,按××投档
+H213,工科试验班*机器人*,080803T,category,按××投档；不含智能建造与智慧交通(工程机器人…)
