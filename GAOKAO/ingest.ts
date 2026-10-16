@@ -52,14 +52,15 @@ export function ingestSdToudang(opts: { dbPath?: string; dir?: string; files?: s
     db.pragma('foreign_keys = ON');
     const now = new Date().toISOString();
     const ins = db.prepare(`INSERT INTO gaokao_toudang
-      (province, year, admission_type, is_ordinary, school_code, school_name, major_code_raw, major_name_raw,
+      (province, year, admission_type, is_ordinary, special_type, school_code, school_name, major_code_raw, major_name_raw,
        subject_requirement, plan_count, min_rank, source_file, source_url, imported_at)
-      VALUES (@province, @year, @admission_type, @is_ordinary, @school_code, @school_name, @major_code_raw, @major_name_raw,
+      VALUES (@province, @year, @admission_type, @is_ordinary, @special_type, @school_code, @school_name, @major_code_raw, @major_name_raw,
        @subject_requirement, @plan_count, @min_rank, @source_file, @source_url, @imported_at)
       ON CONFLICT(province, year, admission_type, school_code, major_code_raw) DO UPDATE SET
         school_name=excluded.school_name, major_name_raw=excluded.major_name_raw,
         subject_requirement=excluded.subject_requirement, plan_count=excluded.plan_count, min_rank=excluded.min_rank,
-        is_ordinary=excluded.is_ordinary, source_file=excluded.source_file, source_url=excluded.source_url, imported_at=excluded.imported_at`);
+        is_ordinary=excluded.is_ordinary, special_type=excluded.special_type,
+        source_file=excluded.source_file, source_url=excluded.source_url, imported_at=excluded.imported_at`);
 
     const yearsTouched = new Set<number>();
     for (const p of paths) {

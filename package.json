@@ -65,7 +65,8 @@
     "gwy:all": "npm run crawl:gwy-grad && npm run crawl:gwy-gk2027 && npm run gwy:ingest",
     "test:gwy": "tsx --test GWY/test/*.test.ts",
     "gaokao:sd-toudang": "tsx GAOKAO/ingest.ts",
-    "test:gaokao": "tsx --test GAOKAO/test/*.test.ts"
+    "test:gaokao": "tsx --test GAOKAO/test/*.test.ts",
+    "gaokao:export-pilot-majors": "tsx GAOKAO/export_pilot_majors.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

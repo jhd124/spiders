@@ -11,6 +11,8 @@ export interface ToudangRow {
   year: number;
   admission_type: string;
   is_ordinary: 0 | 1;
+  /** NULL when ordinary; else one of SPECIAL_TYPE_LABELS (first match wins) */
+  special_type: string | null;
   school_code: string;
   school_name: string;
   major_code_raw: string;
@@ -20,6 +22,22 @@ export interface ToudangRow {
   min_rank: number;
   source_file: string;
   source_url: string | null;
+}
+
+export function detectSpecialType(majorName: string, admissionType: string): string | null {
+  const n = majorName.replace(/\s+/g, '');
+  const t = admissionType.replace(/\s+/g, '');
+  // explicit ordered checks (cleaner than the array edge-case above)
+  if (/高校专项/.test(n) || /高校专项/.test(t)) return '高校专项';
+  if (/非西藏生/.test(n) && (/定藏|定向西藏/.test(n))) return '非西藏生定藏就业';
+  if (/定向西藏/.test(n)) return '定向西藏';
+  if (/文物全科/.test(n)) return '文物全科';
+  if (/中外合作/.test(n) || /中外合作/.test(t)) return '中外合作';
+  // sheet name / admission_type without major hint
+  if (/高校专项/.test(t)) return '高校专项';
+  if (/国家专项|地方专项|专项计划|专项/.test(t) && !/普通类/.test(t)) return '专项';
+  if (/艺术类|体育类|提前批|综合评价|强基/.test(t)) return t.slice(0, 32) || '其他特殊类型';
+  return null;
 }
 
 const norm = (s: string) => s.replace(/\s+/g, '').replace(/　/g, '');
@@ -46,11 +64,10 @@ export function yearFromFilename(name: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** Special / non-product rows: 专项、保底、中外合作 flagged by type or name (still stored). */
+/** Product rows: 普通类 admission and no special_type from detectSpecialType. */
 export function isOrdinaryRow(admissionType: string, majorName: string): boolean {
-  if (!/普通类/.test(admissionType) || /专项|提前批|艺术类|体育类|综合评价|强基/.test(admissionType)) return false;
-  // keep 中外合作 in DB but flag off ordinary product counts (expert can revisit)
-  if (/中外合作/.test(majorName)) return false;
+  if (detectSpecialType(majorName, admissionType)) return false;
+  if (!/普通类/.test(admissionType)) return false;
   return true;
 }
 
@@ -109,11 +126,13 @@ export function parseSheetMatrix(
       plan_count = Number.isFinite(p) ? p : null;
     }
     const subject_requirement = cols.subject != null ? (cell(row[cols.subject]) || null) : null;
+    const special_type = detectSpecialType(mj.name, admission_type);
     out.push({
       province: PROVINCE,
       year: opts.year,
       admission_type,
-      is_ordinary: isOrdinaryRow(admission_type, mj.name) ? 1 : 0,
+      special_type,
+      is_ordinary: special_type || !/普通类/.test(admission_type) ? 0 : 1,
       school_code: sc.code,
       school_name: sc.name,
       major_code_raw: mj.code,

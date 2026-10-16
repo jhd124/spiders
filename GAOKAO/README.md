@@ -50,3 +50,31 @@ npm run test:gaokao
 3. Check: `SELECT year, school_code, count(*) FROM gaokao_toudang GROUP BY 1,2;`
 
 一分一段表: already on the server; not ingested here.
+
+## Special types (`special_type` + `is_ordinary=0`)
+
+Matched on `major_name_raw` (and sheet/`admission_type` when needed), first hit wins:
+
+| Label | Rule |
+|---|---|
+| 高校专项 | name or type contains `高校专项` |
+| 非西藏生定藏就业 | name has `非西藏生` and (`定藏` or `定向西藏`) |
+| 定向西藏 | name has `定向西藏` (and not the 非西藏生 form above) |
+| 文物全科 | name contains `文物全科` |
+| 中外合作 | name or type contains `中外合作` |
+| 专项 / 艺术类… | non-普通类 sheet/type fallbacks |
+
+Default student major-page counts use `is_ordinary = 1` only.
+
+## Export majors for expert mapping
+
+After ingest (all years 2022–2026 that are present):
+
+```bash
+npm run gaokao:export-pilot-majors
+# → $SPIDERS_DATA_DIR/gaokao/pilot-majors-for-mapping.csv
+npm run gaokao:export-pilot-majors -- --out /tmp/pilot-majors.csv
+```
+
+Columns: `院校代号,专业代号,专业名称原文,出现年份,是否已标特殊类型,特殊类型`  
+One row per school_code + major_code_raw + major_name_raw; `出现年份` is a comma-separated list (e.g. `2024,2025,2026`).

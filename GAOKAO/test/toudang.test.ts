@@ -14,8 +14,9 @@ process.env.CAREER_DB = join(TMP, 'career.db');
 
 const Database = (await import('better-sqlite3')).default;
 const { migrate } = await import('../../CAREER/migrate.js');
-const { splitCodeName, splitMajor, parseCsvText, parseWorkbook, isOrdinaryRow } = await import('../parse.js');
+const { splitCodeName, splitMajor, parseCsvText, parseWorkbook, isOrdinaryRow, detectSpecialType } = await import('../parse.js');
 const { ingestSdToudang, pilotOrdinaryRows, loadFile } = await import('../ingest.js');
+const { exportPilotMajors, pilotMajorsCsv } = await import('../export_pilot_majors.js');
 const { PILOT_CODES } = await import('../sources.js');
 
 migrate(process.env.CAREER_DB!, () => {});
@@ -26,17 +27,27 @@ test('split code/name', () => {
   assert.deepEqual(splitMajor('01计算机类'), { code: '01', name: '计算机类' });
   assert.equal(isOrdinaryRow('普通类常规批第1次志愿', '计算机类'), true);
   assert.equal(isOrdinaryRow('普通类常规批第1次志愿', '某中外合作办学'), false);
+  assert.equal(detectSpecialType('考古学（文物全科人才）', '普通类常规批第1次志愿'), '文物全科');
+  assert.equal(detectSpecialType('土木工程（非西藏生源定向西藏就业）', '普通类常规批第1次志愿'), '非西藏生定藏就业');
+  assert.equal(detectSpecialType('临床医学（定向西藏）', '普通类常规批第1次志愿'), '定向西藏');
+  assert.equal(detectSpecialType('某专业（高校专项）', '普通类常规批第1次志愿'), '高校专项');
+  assert.equal(detectSpecialType('某中外合作办学', '普通类常规批第1次志愿'), '中外合作');
+  assert.equal(detectSpecialType('计算机类', '普通类常规批第1次志愿'), null);
 });
 
 test('2025 CSV: plan_count present, subject null', () => {
   const rows = loadFile(join(FIX, 'sd-toudang-2025.csv'));
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 10);
   const cs = rows.find((r) => r.school_code === 'A422' && r.major_code_raw === '01')!;
   assert.deepEqual(
     { plan_count: cs.plan_count, subject_requirement: cs.subject_requirement, min_rank: cs.min_rank, school_name: cs.school_name },
     { plan_count: 100, subject_requirement: null, min_rank: 8500, school_name: '山东大学' },
   );
-  assert.equal(rows.find((r) => /中外合作/.test(r.major_name_raw))!.is_ordinary, 0);
+  assert.equal(rows.find((r) => /中外合作/.test(r.major_name_raw))!.special_type, '中外合作');
+  assert.equal(rows.find((r) => /文物全科/.test(r.major_name_raw))!.special_type, '文物全科');
+  assert.equal(rows.find((r) => /非西藏生/.test(r.major_name_raw))!.special_type, '非西藏生定藏就业');
+  assert.equal(rows.find((r) => /定向西藏）/.test(r.major_name_raw) || /定向西藏\)/.test(r.major_name_raw))!.special_type, '定向西藏');
+  assert.equal(rows.find((r) => /高校专项/.test(r.major_name_raw))!.is_ordinary, 0);
 });
 
 test('2026 CSV: subject present, plan_count null', () => {
@@ -78,15 +89,22 @@ test('ingest into career.db + pilot filter', () => {
   copyFileSync(join(FIX, 'sd-toudang-2026.csv'), join(dir, 'sd-toudang-2026.csv'));
   const r = ingestSdToudang({ dir });
   assert.equal(r.files, 2);
-  assert.equal(r.rows, 10);
+  assert.equal(r.rows, 14);
   assert.deepEqual(r.years, [2025, 2026]);
   const db = new Database(process.env.CAREER_DB!);
   const pilots = db.prepare("SELECT school_code, count(*) n FROM gaokao_pilot_school").get() as { n: number };
   assert.equal(pilots.n, 3);
   const a422 = pilotOrdinaryRows(db, 'A422', 2025);
-  assert.equal(a422.length, 2, '中外合作 excluded from ordinary');
+  assert.equal(a422.length, 2, 'special types excluded from ordinary');
   assert.equal((a422[0] as { min_rank: number }).min_rank, 8500);
   const n2026 = db.prepare("SELECT count(*) n FROM gaokao_toudang WHERE year=2026 AND subject_requirement IS NOT NULL").get() as { n: number };
   assert.equal(n2026.n, 4);
+  const flagged = db.prepare("SELECT special_type, count(*) n FROM gaokao_toudang WHERE is_ordinary=0 AND school_code='A422' GROUP BY 1 ORDER BY 1").all();
+  assert.ok(flagged.length >= 4);
+  const exp = exportPilotMajors(db, { years: [2022, 2023, 2024, 2025, 2026] });
+  assert.ok(exp.some((x) => x.school_code === 'A422' && x.major_name_raw === '计算机类' && x.years.includes('2025') && x.years.includes('2026') && x.special_flagged === '否'));
+  assert.ok(exp.some((x) => x.special_flagged === '是' && x.special_type === '文物全科'));
+  const csv = pilotMajorsCsv(exp);
+  assert.match(csv, /^院校代号,专业代号,专业名称原文,出现年份,是否已标特殊类型,特殊类型/);
   db.close();
 });
