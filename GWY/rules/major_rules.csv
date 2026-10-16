@@ -1,5 +1,9 @@
-# Expert rules for 专业 phrases that the catalog matcher leaves unresolved / related.
-# phrase = one item of 专业 exactly as split by GWY (see data/civil-service/gk2027_unresolved_majors.csv)
-# level = any | undergrad | grad ; catalog = undergrad | grad | (empty) ; major_code = code(s), '|'-separated
-# match_type = exact | category | unlimited | related | unresolved ; reviewer = who decided
+# Expert rules for 专业 phrases the catalog matcher leaves unresolved / related (see data/civil-service/gk2027_unresolved_majors.csv).
+# phrase      one item of 专业 exactly as split by GWY, e.g. a 国考-specific category such as 财会审计类 / 社会保障类
+# level       any | undergrad | grad  (which 本科：/研究生： prefix the rule applies to)
+# catalog     undergrad | grad | (empty: 6-digit = 本科专业, 4-digit = 本科专业类 if it exists else 研究生一级学科)
+# major_code  one or more MOE codes, '|'-separated; 6-digit majors and 4-digit 专业类 / 2-digit 门类 are expanded to their
+#             本科 majors for counts; prefix grad:/undergrad: to mix catalogs, e.g. undergrad:1202|grad:1202
+# match_type  exact | category | unlimited | related | unresolved
+# MOE catalogs only (本科专业目录 / 研究生教育学科专业目录); never training-company category lists.
 phrase,level,catalog,major_code,match_type,note,reviewer

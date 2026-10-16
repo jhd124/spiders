@@ -57,7 +57,7 @@ export async function crawl(argv = process.argv.slice(2)): Promise<PositionsDump
     for (const wb of books) {
       const r = positionRows(wb);
       rows.push(...r.rows); skipped.push(...r.skipped);
-      console.log(`[gwy-gk2027] ${wb.name}: ${r.rows.length} rows`);
+      console.log(`[gwy-gk2027] ${wb.name}: ${r.rows.length} rows${r.ignored.length ? ` (ignored empty/headerless sheets: ${r.ignored.join(', ')})` : ''}`);
     }
     const seen = new Set<string>();
     for (const r of rows) {

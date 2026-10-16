@@ -11,8 +11,14 @@ unreachable or blocked, the crawler stops and says where to put the official fil
 
 In the container the data dir is /app/data, so the zip goes to /opt/spiders/data/civil-service/ on the host.
 
-Matching (GWY/parse.ts) never guesses. A 专业 item is `exact`/`category` only when its code and name agree with
-the 本科 catalog (major / major_class / major_category, from CAREER) or the 研究生 catalog (gwy_grad_discipline);
-a name without a code must equal a catalog name. `不限` → unlimited; 相关/相近/等专业 → related; everything else
-(including codes whose printed name differs from the catalog) → unresolved. The expert rules in
-GWY/rules/major_rules.csv are applied first and mark matches reviewed=1; fill them from the unresolved CSV.
+Matching (GWY/parse.ts), expert rulings 2026-10-16 — MOE catalogs only, for 国考 and 省考 alike:
+1. The name decides. A printed code that disagrees with the catalog name (120401行政管理 → 120402) or is not in the
+   catalog only sets `code_doubtful = 1`.
+2. Segment = the printed 本科：/研究生： prefix, else the 学历 (硕士+ → 研究生). In the 本科 segment a 4-digit code/name is a
+   专业类 and is expanded to all its majors (gwy_position_undergrad_major); in the 研究生 segment it is a 一级学科.
+   Several codes with one name（0832、0972）食品科学与工程: every code whose catalog name agrees counts, the rest are flagged.
+3. 本科 product counts use only 本科-segment matches of positions that do not need 硕士+. Positions needing 硕士及以上
+   have `gwy_position.needs_grad = 1` (需读研后报考) and are reported separately in gk2027_match_stats.json.
+`不限` → unlimited; 相关/相近/等专业 → related; no catalog name → unresolved; both go to the unresolved CSV for the expert.
+Expert rules (GWY/rules/major_rules.csv, applied first, reviewed = 1) can map custom names such as 财会审计类 to code lists.
+Empty / headerless sheets (e.g. an empty Sheet1) are ignored silently.

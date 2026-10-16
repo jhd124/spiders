@@ -35,14 +35,15 @@ export async function workbooksFrom(name: string, data: Uint8Array): Promise<Wor
 }
 
 /** Every sheet with a header row containing 职位代码 and 部门代码; rows below it until the data ends. */
-export function positionRows(wb: Workbook): { rows: PositionRow[]; skipped: string[] } {
+export function positionRows(wb: Workbook): { rows: PositionRow[]; skipped: string[]; ignored: string[] } {
   const book = XLSX.read(wb.data, { type: 'array', cellText: true, cellDates: false });
   const rows: PositionRow[] = [];
   const skipped: string[] = [];
+  const ignored: string[] = []; // empty / headerless sheets (e.g. an empty Sheet1): not a failure
   for (const sheet of book.SheetNames) {
     const grid = XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[sheet]!, { header: 1, raw: false, defval: '' });
     const h = grid.findIndex((r) => r.map(clean).includes('职位代码') && r.map(clean).includes('部门代码'));
-    if (h < 0) { skipped.push(`${wb.name}/${sheet}: no header row`); continue; }
+    if (h < 0) { ignored.push(`${wb.name}/${sheet}`); continue; }
     const header = grid[h]!.map(clean);
     for (let i = h + 1; i < grid.length; i++) {
       const cells = grid[i]!.map(clean);
@@ -55,7 +56,7 @@ export function positionRows(wb: Workbook): { rows: PositionRow[]; skipped: stri
       rows.push({ sheet, row_no: i + 1, file: wb.name, raw, cols });
     }
   }
-  return { rows, skipped };
+  return { rows, skipped, ignored };
 }
 
 /* ---------------- notice ---------------- */
@@ -115,7 +116,18 @@ export interface Catalogs {
   grad: Map<string, string>;
 }
 export interface Rule { id: number; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
-export interface Match { seq: number; level: Level; phrase: string; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType; rule_id: number | null }
+export interface Target { catalog: 'undergrad' | 'grad'; code: string; kind: 'major' | 'class' | 'category' | 'discipline' }
+export interface Match {
+  seq: number; level: Level; phrase: string;
+  /** segment the phrase was matched in: the printed 本科/研究生 prefix, else inferred from 学历 */
+  segment: Level;
+  catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType; rule_id: number | null;
+  /** a printed code disagreed with the catalog name or is not in the catalog; the match stands by name */
+  code_doubtful: number;
+  targets: Target[];
+  /** 本科 majors this phrase admits (classes/categories expanded); [] for 研究生 matches */
+  undergrad_majors: string[];
+}
 
 const LEVEL_PREFIX: [RegExp, Level][] = [
   [/^(?:本科|大学本科|学士)(?:专业)?[:：]/, 'undergrad'],
@@ -142,53 +154,107 @@ export function splitMajors(text: string): { level: Level; phrase: string }[] {
   return out;
 }
 
-const UNLIMITED = /^(?:专业)?不限(?:专业)?$|^不限$/;
-const RELATED = /相关|相近|等专业|类似/;
-
-/** Match one phrase against the catalogs. Only verbatim code+name / name agreement counts; everything else is unresolved. */
-export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: Rule[] = []): Omit<Match, 'seq'> {
-  const r = rules.find((x) => x.phrase === phrase && (x.level === level || x.level === 'any'));
-  if (r) return { level, phrase, catalog: r.catalog, major_code: r.major_code, match_type: r.match_type, rule_id: r.id };
-  const res = (catalog: Match['catalog'], major_code: string | null, match_type: MatchType): Omit<Match, 'seq'> => ({ level, phrase, catalog, major_code, match_type, rule_id: null });
-  const p = phrase.replace(/[（(]\s*(?:\d{4,6}[A-Z]{0,2})\s*[）)]/, '').trim();
-  if (UNLIMITED.test(p)) return res(null, null, 'unlimited');
-  if (RELATED.test(p)) return res(null, null, 'related');
-  const code = (phrase.match(/^(\d{6}[A-Z]{0,2}|\d{4}|\d{2})(?![\d])/) ?? phrase.match(/[（(](\d{6}[A-Z]{0,2}|\d{4})[）)]/))?.[1];
-  const name = p.replace(/^\d{2,6}[A-Z]{0,2}\s*/, '').replace(/^(?:一级学科|学科门类|专业学位类别)[:：]?/, '').trim();
-  const grad = level !== 'undergrad', ug = level !== 'grad';
-  if (code) {
-    // a code is only trusted when the printed name agrees with the catalog name for that code
-    if (code.length >= 6 && ug && cat.majors.get(code) === name) return res('undergrad', code, 'exact');
-    if (code.length === 6 && ug) {
-      // printed without the T/K suffix (080910 数据科学与大数据技术 → 080910T): same base code and same name only
-      const k = [...cat.majors.keys()].filter((c) => c.replace(/[A-Z]+$/, '') === code && cat.majors.get(c) === name);
-      if (k.length === 1) return res('undergrad', k[0]!, 'exact');
-    }
-    if (code.length === 2 && ug && cat.ugCategories?.get(code) === name) return res('undergrad', code, 'category');
-    if (code.length === 4 && ug && cat.classes.get(code) === name) return res('undergrad', code, 'category');
-    if (code.length === 4 && grad && cat.grad.get(code) === name) return res('grad', code, 'exact');
-    if (code.length === 2 && grad && cat.grad.get(code) === name.replace(/^门类/, '')) return res('grad', code, 'category');
-    return res(null, null, 'unresolved');
-  }
-  const byName = (m: Map<string, string>, n: string) => [...m].filter(([, v]) => v === n).map(([k]) => k);
-  const hits: Omit<Match, 'seq'>[] = [];
-  if (ug) for (const k of byName(cat.majors, name)) hits.push(res('undergrad', k, 'exact'));
-  if (ug) for (const k of byName(cat.classes, name)) hits.push(res('undergrad', k, 'category'));
-  if (ug && cat.ugCategories) for (const k of byName(cat.ugCategories, name.replace(/^门类/, ''))) hits.push(res('undergrad', k, 'category'));
-  if (grad) for (const k of byName(cat.grad, name)) hits.push(res('grad', k, k.length === 2 ? 'category' : 'exact'));
-  if (grad && /类$/.test(name)) for (const k of byName(cat.grad, name.replace(/类$/, ''))) if (k.length === 2) hits.push(res('grad', k, 'category'));
-  if (hits.length === 1) return hits[0]!;
-  if (hits.length > 1) {
-    // same name in both catalogs (e.g. 软件工程 080902 / 0835) when the level is not given: keep both codes, flagged by catalog
-    const codes = hits.map((h) => `${h.catalog}:${h.major_code}`).join('|');
-    return { level, phrase, catalog: null, major_code: codes, match_type: hits.every((h) => h.match_type === 'category') ? 'category' : 'exact', rule_id: null };
-  }
-  return res(null, null, 'unresolved');
+/** 学历 requires 硕士 or above (→ 需读研后报考; never counted for 本科 products) */
+export const needsGrad = (education: string) => /^(仅限)?(硕士|博士)|^研究生/.test(education.trim()) && !/本科/.test(education);
+/** segment for phrases without a 本科：/研究生： prefix */
+export function segmentFor(education: string): Level {
+  if (needsGrad(education)) return 'grad';
+  if (/^仅限(本科|大专)|^(大专|本科)$/.test(education.trim())) return 'undergrad';
+  return 'any';
 }
 
-export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = []): Match[] {
-  if (!text.trim()) return [{ seq: 0, level: 'any', phrase: '', catalog: null, major_code: null, match_type: 'unresolved', rule_id: null }];
-  return splitMajors(text).map((x, seq) => ({ seq, ...matchPhrase(x.phrase, x.level, cat, rules) }));
+const UNLIMITED = /^(?:专业)?不限(?:专业)?$|^不限$/;
+const RELATED = /相关|相近|等专业|类似/;
+const CODE = /\d{6}[A-Z]{0,2}|\d{4}|\d{2}/g;
+const base = (c: string) => c.replace(/[A-Z]+$/, '');
+
+/** codes printed in the phrase: leading 「0809计算机类」, bracketed 「（0832、0972）食品科学与工程」 or trailing 「计算机类（0809）」 */
+export function splitCodes(phrase: string): { codes: string[]; name: string } {
+  let s = phrase.trim(), codes: string[] = [];
+  const lead = s.match(/^[（(]\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/\s]*\s*)+)[）)]\s*/) ?? s.match(/^((?:\d{2,6}[A-Z]{0,2}[、/]?)+)(?=[\u4e00-\u9fa5])/);
+  if (lead) { codes = lead[1]!.match(CODE) ?? []; s = s.slice(lead[0].length); }
+  const tail = s.match(/\s*[（(]\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/\s]*\s*)+)[）)]\s*$/);
+  if (tail) { codes.push(...(tail[1]!.match(CODE) ?? [])); s = s.slice(0, tail.index); }
+  return { codes, name: s.replace(/^(?:一级学科|学科门类|专业学位类别|门类)[:：]?/, '').trim() };
+}
+
+/** 本科 majors admitted by a target: a major itself, every major of a 专业类 / 门类 */
+export function expandUndergrad(t: Target, cat: Catalogs): string[] {
+  if (t.catalog !== 'undergrad') return [];
+  if (t.kind === 'major') return [t.code];
+  return [...cat.majors.keys()].filter((c) => c.startsWith(t.code)).sort();
+}
+/** a code from a rule row: 6 digits → 本科专业, 4 → 专业类 (本科) / 一级学科 (研究生), 2 → 门类 */
+function ruleTarget(code: string, catalog: Rule['catalog'], cat: Catalogs): Target | null {
+  const c = code.replace(/^(undergrad|grad):/, '');
+  const cl = code.startsWith('grad:') ? 'grad' : code.startsWith('undergrad:') ? 'undergrad' : catalog ?? (c.length === 4 && !cat.classes.has(c) ? 'grad' : 'undergrad');
+  if (cl === 'grad') return cat.grad.has(c) || !cat.grad.size ? { catalog: 'grad', code: c, kind: c.length === 2 ? 'category' : 'discipline' } : null;
+  if (c.length >= 6) return { catalog: 'undergrad', code: [...cat.majors.keys()].find((k) => k === c || base(k) === c) ?? c, kind: 'major' };
+  return { catalog: 'undergrad', code: c, kind: c.length === 4 ? 'class' : 'category' };
+}
+
+/**
+ * Match one phrase (expert rulings 2026-10-16):
+ *  - the name decides; a printed code that disagrees with the catalog name or is not in the catalog only sets code_doubtful
+ *  - in the 本科 segment a 4-digit code/name is a 专业类 (expanded to all its majors); in the 研究生 segment it is a 一级学科
+ *  - several codes with one name: every code whose catalog name equals the name counts; the rest are doubtful
+ *  - 不限 → unlimited; 相关/相近/等专业 → related (report); no catalog name → unresolved (report)
+ */
+export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: Rule[] = [], segment: Level = level): Omit<Match, 'seq'> {
+  const seg: Level = level !== 'any' ? level : segment;
+  const out = (targets: Target[], match_type: MatchType, code_doubtful = 0, rule_id: number | null = null): Omit<Match, 'seq'> => {
+    const cats = [...new Set(targets.map((t) => t.catalog))];
+    return {
+      level, phrase, segment: seg, match_type, rule_id, code_doubtful, targets,
+      catalog: cats.length === 1 ? cats[0]! : null,
+      major_code: targets.length ? targets.map((t) => (cats.length > 1 ? `${t.catalog}:${t.code}` : t.code)).join('|') : null,
+      undergrad_majors: seg === 'grad' ? [] : [...new Set(targets.flatMap((t) => expandUndergrad(t, cat)))].sort(),
+    };
+  };
+  const r = rules.find((x) => x.phrase === phrase && (x.level === level || x.level === 'any'));
+  if (r) {
+    const targets = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean).map((c) => ruleTarget(c, r.catalog, cat)).filter((t): t is Target => !!t);
+    return out(targets, r.match_type, 0, r.id);
+  }
+  const { codes, name } = splitCodes(phrase);
+  if (UNLIMITED.test(name)) return out([], 'unlimited');
+  if (RELATED.test(name)) return out([], 'related');
+  const lookup = (ug: boolean, grad: boolean): Target[] => {
+    const cands: Target[] = [];
+    const byName = (m: Map<string, string> | undefined, n: string) => (m ? [...m].filter(([, v]) => v === n).map(([k]) => k) : []);
+    if (ug) {
+      cands.push(...byName(cat.majors, name).map((code): Target => ({ catalog: 'undergrad', code, kind: 'major' })));
+      cands.push(...byName(cat.classes, name).map((code): Target => ({ catalog: 'undergrad', code, kind: 'class' })));
+      cands.push(...byName(cat.ugCategories, name).map((code): Target => ({ catalog: 'undergrad', code, kind: 'category' })));
+      // 「0809计算机」 style: a 4-digit code in the 本科 segment is a 专业类 even when printed without 类
+      if (!cands.length && codes.length) cands.push(...byName(cat.classes, name + '类').filter((k) => codes.includes(k)).map((code): Target => ({ catalog: 'undergrad', code, kind: 'class' })));
+    }
+    if (grad) {
+      for (const code of byName(cat.grad, name)) cands.push({ catalog: 'grad', code, kind: code.length === 2 ? 'category' : 'discipline' });
+      if (/类$/.test(name)) for (const code of byName(cat.grad, name.replace(/类$/, ''))) if (code.length === 2) cands.push({ catalog: 'grad', code, kind: 'category' });
+    }
+    return cands;
+  };
+  let cands = lookup(seg !== 'grad', seg !== 'undergrad');
+  let crossSegment = 0;
+  // the name exists only in the other catalog (e.g. 120401行政管理 printed for a 硕士 position: 本科 120402 行政管理):
+  // the name still wins, the match is flagged; 研究生-segment matches never feed 本科 counts (undergrad_majors stays empty)
+  if (!cands.length && seg !== 'any') { cands = lookup(seg === 'grad', seg === 'undergrad'); crossSegment = cands.length ? 1 : 0; }
+  if (!cands.length) return out([], 'unresolved');
+  const agrees = (t: Target, c: string) => t.code === c || base(t.code) === c;
+  let doubtful = crossSegment;
+  if (codes.length) {
+    const hit = cands.filter((t) => codes.some((c) => agrees(t, c)));
+    if (hit.length) cands = hit; // codes pick among same-name entries (食品科学与工程: 0832 研究生 vs 082701 本科)
+    if (codes.some((c) => !cands.some((t) => agrees(t, c)))) doubtful = 1;
+  }
+  return out(cands, cands.every((t) => t.kind === 'class' || t.kind === 'category') ? 'category' : 'exact', doubtful);
+}
+
+export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], education = ''): Match[] {
+  const segment = segmentFor(education);
+  if (!text.trim()) return [{ seq: 0, ...matchPhrase('', 'any', cat, [], segment), match_type: 'unresolved' }];
+  return splitMajors(text).map((x, seq) => ({ seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment) }));
 }
 
 /** CSV with a header row; quotes "…" with "" escapes. */

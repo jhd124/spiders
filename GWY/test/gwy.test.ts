@@ -11,15 +11,15 @@ const TMP = mkdtempSync(join(tmpdir(), 'gwy-'));
 process.env.SPIDERS_DATA_DIR = TMP;
 process.env.CAREER_DB = join(TMP, 'career.db');
 
-const { parseAge, splitMajors, matchPhrase, matchMajors, parseGradCatalog, workbooksFrom, positionRows, parseCsv } = await import('../parse.js');
+const { parseAge, splitMajors, splitCodes, needsGrad, segmentFor, matchPhrase, matchMajors, parseGradCatalog, workbooksFrom, positionRows, parseCsv } = await import('../parse.js');
 const { GK2027 } = await import('../sources.js');
 type Catalogs = import('../parse.js').Catalogs;
 
 const cat: Catalogs = {
-  majors: new Map([['080901', '计算机科学与技术'], ['080902', '软件工程'], ['080910T', '数据科学与大数据技术'], ['120402', '行政管理'], ['030101K', '法学']]),
+  majors: new Map([['080901', '计算机科学与技术'], ['080902', '软件工程'], ['080910T', '数据科学与大数据技术'], ['120402', '行政管理'], ['030101K', '法学'], ['082701', '食品科学与工程']]),
   classes: new Map([['0809', '计算机类'], ['0301', '法学类']]),
   ugCategories: new Map([['08', '工学']]),
-  grad: new Map([['08', '工学'], ['0812', '计算机科学与技术'], ['0835', '软件工程'], ['0351', '法律'], ['0301', '法学']]),
+  grad: new Map([['08', '工学'], ['0812', '计算机科学与技术'], ['0835', '软件工程'], ['0351', '法律'], ['0301', '法学'], ['0832', '食品科学与工程'], ['1004', '公共卫生与预防医学']]),
 };
 
 test('age rule from the 2027 国考 notice', () => {
@@ -35,25 +35,60 @@ test('专业 splitting: levels, separators, brackets kept together', () => {
   assert.deepEqual(splitMajors('经济学（含金融、财政）、不限'), [{ level: 'any', phrase: '经济学（含金融、财政）' }, { level: 'any', phrase: '不限' }]);
 });
 
-test('matching is verbatim only; conflicts, 相关专业 and unknown names are not guessed', () => {
-  const m = (p: string, l: 'any' | 'undergrad' | 'grad' = 'any') => { const r = matchPhrase(p, l, cat); return [r.catalog, r.major_code, r.match_type]; };
-  assert.deepEqual(m('080901计算机科学与技术'), ['undergrad', '080901', 'exact']);
-  assert.deepEqual(m('080910数据科学与大数据技术'), ['undergrad', '080910T', 'exact'], 'T suffix omitted, name agrees');
-  assert.deepEqual(m('0809计算机类'), ['undergrad', '0809', 'category']);
-  assert.deepEqual(m('0812计算机科学与技术'), ['grad', '0812', 'exact']);
-  assert.deepEqual(m('计算机类', 'undergrad'), ['undergrad', '0809', 'category']);
-  assert.deepEqual(m('法律', 'grad'), ['grad', '0351', 'exact']);
-  assert.deepEqual(m('软件工程', 'undergrad'), ['undergrad', '080902', 'exact']);
-  assert.deepEqual(m('软件工程'), [null, 'undergrad:080902|grad:0835', 'exact'], 'level unknown: both catalogs kept');
-  assert.deepEqual(m('工学', 'undergrad'), ['undergrad', '08', 'category']);
-  assert.deepEqual(m('不限'), [null, null, 'unlimited']);
-  assert.deepEqual(m('计算机相关专业'), [null, null, 'related']);
-  assert.deepEqual(m('120401行政管理'), [null, null, 'unresolved'], 'code/name disagree (120401 is 公共事业管理)');
-  assert.deepEqual(m('人工智能工程'), [null, null, 'unresolved'], 'not in any catalog');
-  assert.deepEqual(m('0812计算机科学与技术', 'undergrad'), [null, null, 'unresolved'], '4-digit grad code under 本科');
-  const rule = { id: 7, phrase: '人工智能工程', level: 'any' as const, catalog: 'undergrad' as const, major_code: '080717T', match_type: 'exact' as const };
-  assert.deepEqual(matchPhrase('人工智能工程', 'any', cat, [rule]).rule_id, 7, 'expert rule wins');
+const m = (p: string, l: 'any' | 'undergrad' | 'grad' = 'any', seg: 'any' | 'undergrad' | 'grad' = l, rules: Parameters<typeof matchPhrase>[3] = []) => {
+  const r = matchPhrase(p, l, cat, rules, seg); return [r.catalog, r.major_code, r.match_type, r.code_doubtful];
+};
+
+test('verbatim matches; 不限 / 相关专业 / unknown names are not guessed', () => {
+  assert.deepEqual(m('080901计算机科学与技术'), ['undergrad', '080901', 'exact', 0]);
+  assert.deepEqual(m('080910数据科学与大数据技术'), ['undergrad', '080910T', 'exact', 0], 'T suffix omitted, name agrees');
+  assert.deepEqual(m('法律', 'grad'), ['grad', '0351', 'exact', 0]);
+  assert.deepEqual(m('软件工程', 'undergrad'), ['undergrad', '080902', 'exact', 0]);
+  assert.deepEqual(m('软件工程'), [null, 'undergrad:080902|grad:0835', 'exact', 0], 'segment unknown: both catalogs kept');
+  assert.deepEqual(m('工学', 'undergrad'), ['undergrad', '08', 'category', 0]);
+  assert.deepEqual(m('不限'), [null, null, 'unlimited', 0]);
+  assert.deepEqual(m('计算机相关专业'), [null, null, 'related', 0]);
+  assert.deepEqual(m('人工智能工程'), [null, null, 'unresolved', 0]);
   assert.equal(matchMajors('', cat)[0]!.match_type, 'unresolved');
+});
+
+test('ruling 1: code and name disagree → the name wins, code_doubtful', () => {
+  assert.deepEqual(m('120401行政管理'), ['undergrad', '120402', 'exact', 1]);
+  assert.deepEqual(m('0812计算机科学与技术', 'undergrad'), ['undergrad', '080901', 'exact', 1], '本科 segment: name is a 本科 major');
+  // a 硕士 position printing a 本科-only name: still matched by name (flagged), but never counted for 本科
+  const r = matchPhrase('120401行政管理', 'any', cat, [], 'grad');
+  assert.deepEqual([r.catalog, r.major_code, r.code_doubtful, r.undergrad_majors], ['undergrad', '120402', 1, []]);
+});
+
+test('ruling 2: 4-digit codes by segment; 专业类 expands; several codes with one name', () => {
+  const ug = matchPhrase('0809计算机类', 'undergrad', cat);
+  assert.deepEqual([ug.catalog, ug.major_code, ug.match_type, ug.undergrad_majors], ['undergrad', '0809', 'category', ['080901', '080902', '080910T']]);
+  assert.deepEqual(m('0809计算机', 'undergrad'), ['undergrad', '0809', 'category', 0], '本科 4-digit code = 专业类 even without 类');
+  assert.deepEqual(m('0812计算机科学与技术', 'grad'), ['grad', '0812', 'exact', 0], '研究生 4-digit code = 一级学科');
+  assert.deepEqual(matchPhrase('0812计算机科学与技术', 'grad', cat).undergrad_majors, []);
+  assert.deepEqual(m('（0832、0972）食品科学与工程'), ['grad', '0832', 'exact', 1], '0832 agrees (picks 研究生 over 本科 082701), 0972 not in catalog → flagged');
+  assert.deepEqual(m('（0832、082701）食品科学与工程'), [null, 'undergrad:082701|grad:0832', 'exact', 0], 'both codes agree → both count');
+  assert.deepEqual(m('（0779、1004 ）公共卫生与预防医学'), ['grad', '1004', 'exact', 1]);
+  assert.deepEqual(splitCodes('计算机类（0809）'), { codes: ['0809'], name: '计算机类' });
+});
+
+test('ruling 3: segment from 学历; 硕士+ positions are 需读研后报考', () => {
+  assert.equal(needsGrad('硕士研究生及以上'), true); assert.equal(needsGrad('仅限博士研究生'), true); assert.equal(needsGrad('研究生'), true);
+  assert.equal(needsGrad('本科及以上'), false); assert.equal(needsGrad('本科或硕士研究生'), false); assert.equal(needsGrad('仅限本科'), false);
+  assert.equal(segmentFor('仅限硕士研究生'), 'grad'); assert.equal(segmentFor('仅限本科'), 'undergrad'); assert.equal(segmentFor('本科及以上'), 'any');
+  const g = matchMajors('软件工程', cat, [], '硕士研究生及以上')[0]!;
+  assert.deepEqual([g.segment, g.major_code, g.undergrad_majors], ['grad', '0835', []]);
+  const u = matchMajors('本科：软件工程；研究生：软件工程', cat, [], '本科及以上');
+  assert.deepEqual(u.map((x) => [x.segment, x.major_code, x.undergrad_majors]), [['undergrad', '080902', ['080902']], ['grad', '0835', []]]);
+});
+
+test('rules: a 国考 custom category name maps to a list of MOE codes (majors and 专业类, expanded)', () => {
+  const rules = [{ id: 3, phrase: '计算机法学类', level: 'any' as const, catalog: 'undergrad' as const, major_code: '0809|030101', match_type: 'category' as const }];
+  const r = matchPhrase('计算机法学类', 'any', cat, rules, 'any');
+  assert.deepEqual([r.rule_id, r.match_type, r.major_code, r.undergrad_majors], [3, 'category', '0809|030101K', ['030101K', '080901', '080902', '080910T']]);
+  assert.deepEqual(matchPhrase('计算机法学类', 'any', cat, rules, 'grad').undergrad_majors, [], 'never counted for 本科 in the 研究生 segment');
+  const g = matchPhrase('X类', 'any', cat, [{ id: 4, phrase: 'X类', level: 'any', catalog: null, major_code: 'grad:0812|undergrad:080902', match_type: 'category' }]);
+  assert.deepEqual([g.major_code, g.undergrad_majors], ['grad:0812|undergrad:080902', ['080902']]);
 });
 
 test('grad catalog lines (official PDF text)', () => {
@@ -70,7 +105,7 @@ function book(rows: string[][]) {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['说明'], ['无表头']]), '说明');
   return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer);
 }
-const row = (code: string, major: string, hires = '2') => HEADER.map((h) => ({ 部门代码: '130110', 职位代码: code, 专业: major, 招考人数: hires, 部门名称: '国家税务总局北京市税务局' } as Record<string, string>)[h] ?? `${h}值`);
+const row = (code: string, major: string, hires = '2', edu = '本科及以上') => HEADER.map((h) => ({ 部门代码: '130110', 职位代码: code, 专业: major, 招考人数: hires, 学历: edu, 部门名称: '国家税务总局北京市税务局' } as Record<string, string>)[h] ?? `${h}值`);
 
 test('职位表: zip → workbooks → rows with every column verbatim', async () => {
   const zip = new JSZip();
@@ -79,9 +114,10 @@ test('职位表: zip → workbooks → rows with every column verbatim', async (
   const data = await zip.generateAsync({ type: 'uint8array' });
   const wbs = await workbooksFrom('gk2027_zhaokaojianzhang.zip', data);
   assert.equal(wbs.length, 1);
-  const { rows, skipped } = positionRows(wbs[0]!);
+  const { rows, skipped, ignored } = positionRows(wbs[0]!);
+  assert.deepEqual(ignored.map((x) => x.split('/').pop()), ['说明']);
   assert.equal(rows.length, 2);
-  assert.match(skipped.join('\n'), /说明: no header row/);
+  assert.deepEqual(skipped, [], 'headerless sheet is not a failure');
   assert.equal(rows[0]!.raw['专业'], '本科：0809计算机类；研究生：0812计算机科学与技术');
   assert.equal(Object.keys(rows[0]!.raw).length, HEADER.length);
   assert.equal(rows[0]!.cols.position_code, '300110001001');
@@ -93,7 +129,7 @@ const GRAD_LINES = CATS.flatMap((c, i) => { const cc = String(i + 1).padStart(2,
   .concat(['08工学', '0812计算机科学与技术（可授工学、理学学位）']);
 test('crawler reads the default data/civil-service zip; ingest stores notice, positions, matches, rules and the unresolved report', async () => {
   const zip = new JSZip();
-  zip.file('招考简章.xlsx', book([row('300110001001', '本科：0809计算机类；研究生：0812计算机科学与技术'), row('300110001002', '计算机相关专业、人工智能工程', '3'), row('300110001003', '人工智能工程', '1')]));
+  zip.file('招考简章.xlsx', book([row('300110001001', '本科：0809计算机类；研究生：0812计算机科学与技术'), row('300110001002', '计算机相关专业、人工智能工程', '3'), row('300110001003', '人工智能工程', '1'), row('300110001004', '软件工程', '5', '硕士研究生及以上')]));
   const { mkdirSync } = await import('node:fs');
   mkdirSync(join(TMP, 'civil-service'), { recursive: true });
   writeFileSync(GK2027.default_file, await zip.generateAsync({ type: 'uint8array' }));
@@ -101,7 +137,7 @@ test('crawler reads the default data/civil-service zip; ingest stores notice, po
   setRunSink(() => {});
   const { crawl } = await import('../gk2027/crawler.js');
   const dump = await crawl([]);
-  assert.equal(dump.rows.length, 3);
+  assert.equal(dump.rows.length, 4);
   assert.ok(dump.source.startsWith('file:'));
 
   const { migrate } = await import('../../CAREER/migrate.js');
@@ -111,14 +147,17 @@ test('crawler reads the default data/civil-service zip; ingest stores notice, po
   db.pragma('foreign_keys = OFF');
   db.prepare("INSERT INTO major_category (code, name, catalog_edition, source_url) VALUES ('08', '工学', 2026, 'x')").run();
   db.prepare("INSERT INTO major_class (code, name, category_code, catalog_edition, source_url) VALUES ('0809', '计算机类', '08', 2026, 'x')").run();
+  for (const [c, n] of [['080901', '计算机科学与技术'], ['080902', '软件工程']]) db.prepare("INSERT INTO major (code, base_code, name, category_code, category_name, class_code, class_name, is_special, is_controlled, is_engineering, degree_categories, catalog_edition, source_url, updated_at) VALUES (?, ?, ?, '08', '工学', '0809', '计算机类', 0, 0, 1, '工学', 2026, 'x', 'x')").run(c, c, n);
   db.close();
   const rules = join(TMP, 'rules.csv');
   writeFileSync(rules, '# c\nphrase,level,catalog,major_code,match_type,note,reviewer\n人工智能工程,any,,,unresolved,"待定, 需专家",expert\n');
   const { ingest } = await import('../ingest.js');
   const r = ingest({ rulesCsv: rules, gradLines: GRAD_LINES });
-  assert.equal(r.positions, 3); assert.equal(r.hires, 6);
-  assert.deepEqual(r.by_type, { exact: 1, category: 1, unlimited: 0, related: 1, unresolved: 2 });
-  assert.equal(r.positions_all_resolved, 1);
+  assert.equal(r.positions, 4); assert.equal(r.hires, 11);
+  assert.deepEqual(r.by_type, { exact: 2, category: 1, unlimited: 0, related: 1, unresolved: 2 });
+  assert.equal(r.positions_all_resolved, 2);
+  assert.deepEqual(r.undergrad, { positions: 3, hires: 6, positions_with_match: 1, hires_with_match: 2, position_majors: 2, distinct_majors: 2 });
+  assert.deepEqual(r.needs_grad, { positions: 1, hires: 5, positions_with_match: 1, hires_with_match: 5 });
   assert.deepEqual(r.unresolved.map((u) => [u.phrase, u.positions, u.hires]), [['人工智能工程', 2, 4], ['计算机相关专业', 1, 3]]);
   const ro = new Database(process.env.CAREER_DB!, { readonly: true });
   const n = ro.prepare("SELECT age_min, age_max, age_max_relaxed FROM gwy_notice WHERE id = 'gk2027'").get();
@@ -126,9 +165,12 @@ test('crawler reads the default data/civil-service zip; ingest stores notice, po
   assert.equal(JSON.parse((ro.prepare("SELECT raw_json FROM gwy_position WHERE position_code = '300110001001'").get() as { raw_json: string }).raw_json)['部门名称'], '国家税务总局北京市税务局');
   assert.deepEqual(ro.prepare("SELECT note, reviewer FROM gwy_major_rule").get(), { note: '待定, 需专家', reviewer: 'expert' });
   assert.equal((ro.prepare("SELECT reviewed FROM gwy_position_major WHERE rule_id IS NOT NULL LIMIT 1").get() as { reviewed: number }).reviewed, 1);
+  assert.deepEqual(ro.prepare("SELECT position_code, major_code FROM gwy_position_undergrad_major ORDER BY 1, 2").all(),
+    [{ position_code: '300110001001', major_code: '080901' }, { position_code: '300110001001', major_code: '080902' }], '硕士 position 004 not in 本科 counts');
+  assert.equal((ro.prepare("SELECT needs_grad FROM gwy_position WHERE position_code = '300110001004'").get() as { needs_grad: number }).needs_grad, 1);
   ro.close();
   const csv = parseCsv(readFileSync(join(TMP, 'civil-service', 'gk2027_unresolved_majors.csv'), 'utf8'));
   assert.equal(csv[0]!.phrase, '人工智能工程'); assert.equal(csv[0]!.positions, '2');
   // re-ingest is idempotent
-  assert.equal(ingest({ rulesCsv: rules, gradLines: null }).positions, 3);
+  assert.equal(ingest({ rulesCsv: rules, gradLines: null }).positions, 4);
 });
