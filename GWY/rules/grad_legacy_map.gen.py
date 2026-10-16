@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Generates grad_legacy_map.csv from the official 1997 学科目录 page (saved HTML) + expert/proposed rows. Paths are box-local; kept for provenance.
+# NOTE: superseded — grad_legacy_map.csv was expert-reviewed 2026-10-16 and edited directly; re-running this would reset it. Do not regenerate.
 import re, html, csv, sqlite3
 t=open('/workspace/xk1997.html',encoding='utf-8',errors='ignore').read()
 t=html.unescape(re.sub(r'<[^>]+>','\n',t)).replace('\xa0',' ')

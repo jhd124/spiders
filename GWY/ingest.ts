@@ -29,10 +29,10 @@ export interface IngestResult { positions: number; hires: number; code_doubtful:
     positions_incomplete: number; hires_incomplete: number;
     /** positions with no matched major at all: absent from major page counts */
     positions_no_match: number; hires_no_match: number };
-  exclusions_partial: number; via_legacy: number;
+  exclusions_partial: number; exclusions_unmatched: number; exclusions_unmatched_distinct: number; via_legacy: number;
   remarks_override: { applied: number; unparsed: number };
   /** 需读研后报考: positions requiring 硕士及以上 — never mixed into the 本科 counts */
-  needs_grad: SegmentStats; phrases: number; by_type: Record<MatchType, number>; positions_all_resolved: number; unresolved: { phrase: string; level: Level; match_type: MatchType; positions: number; hires: number }[]; grad: number }
+  needs_grad: SegmentStats; phrases: number; by_type: Record<MatchType, number>; positions_all_resolved: number; unresolved: { phrase: string; level: Level; match_type: MatchType; positions: number; hires: number; note?: string }[]; grad: number }
 
 export function ingest(opts: { dbPath?: string; dump?: PositionsDump; rulesCsv?: string; legacyCsv?: string; gradLines?: string[] | null; outDir?: string } = {}): IngestResult {
   const dbPath = opts.dbPath ?? CAREER_DB;
@@ -90,7 +90,7 @@ export function ingest(opts: { dbPath?: string; dump?: PositionsDump; rulesCsv?:
       ugCategories: new Map((db.prepare('SELECT code, name FROM major_category').all() as { code: string; name: string }[]).map((r) => [r.code, r.name])),
       grad: new Map((db.prepare('SELECT code, name FROM gwy_grad_discipline').all() as { code: string; name: string }[]).map((r) => [r.code, r.name])),
     };
-    const result: IngestResult = { positions: 0, hires: 0, code_doubtful: 0, undergrad: { positions: 0, hires: 0, positions_with_match: 0, hires_with_match: 0, position_majors: 0, distinct_majors: 0, positions_incomplete: 0, hires_incomplete: 0, positions_no_match: 0, hires_no_match: 0 }, exclusions_partial: 0, via_legacy: 0, remarks_override: { applied: 0, unparsed: 0 }, needs_grad: { positions: 0, hires: 0, positions_with_match: 0, hires_with_match: 0 }, phrases: 0, by_type: { exact: 0, category: 0, unlimited: 0, related: 0, unresolved: 0 }, positions_all_resolved: 0, unresolved: [], grad: cat.grad.size };
+    const result: IngestResult = { positions: 0, hires: 0, code_doubtful: 0, undergrad: { positions: 0, hires: 0, positions_with_match: 0, hires_with_match: 0, position_majors: 0, distinct_majors: 0, positions_incomplete: 0, hires_incomplete: 0, positions_no_match: 0, hires_no_match: 0 }, exclusions_partial: 0, exclusions_unmatched: 0, exclusions_unmatched_distinct: 0, via_legacy: 0, remarks_override: { applied: 0, unparsed: 0 }, needs_grad: { positions: 0, hires: 0, positions_with_match: 0, hires_with_match: 0 }, phrases: 0, by_type: { exact: 0, category: 0, unlimited: 0, related: 0, unresolved: 0 }, positions_all_resolved: 0, unresolved: [], grad: cat.grad.size };
     if (!dump) { console.warn(`[gwy] no positions yet (${OUT_FILE()}); run crawl:gwy-gk2027 first`); return result; }
     if (!cat.majors.size) console.warn('[gwy] WARNING: no 本科 majors in the DB (run the CAREER majors ingest) — 本科 phrases will all be unresolved');
     if (!cat.grad.size) console.warn('[gwy] WARNING: no 研究生 catalog (run crawl:gwy-grad) — 研究生 phrases will all be unresolved');
@@ -101,6 +101,7 @@ export function ingest(opts: { dbPath?: string; dump?: PositionsDump; rulesCsv?:
     const insU = db.prepare('INSERT OR IGNORE INTO gwy_position_undergrad_major (notice_id, dept_code, position_code, major_code, via_seq) VALUES (?,?,?,?,?)');
     const ugMajors = new Set<string>();
     const setIncomplete = db.prepare('UPDATE gwy_position SET majors_incomplete = 1 WHERE notice_id = ? AND dept_code = ? AND position_code = ?');
+    const unmatched = new Set<string>();
     const agg = new Map<string, IngestResult['unresolved'][number]>();
     db.transaction(() => {
       db.prepare('DELETE FROM gwy_position_major WHERE notice_id = ?').run(dump.notice_id);
@@ -124,14 +125,14 @@ export function ingest(opts: { dbPath?: string; dump?: PositionsDump; rulesCsv?:
         const admitted = new Set<string>();
         for (const m of ms) {
           insM.run(dump.notice_id, r.cols.dept_code, r.cols.position_code, m.seq, m.level, m.segment, m.phrase, m.catalog, m.major_code, m.match_type, m.rule_id, m.rule_id ? 1 : 0, m.code_doubtful, m.remarks_override ?? 0, m.exclusions_partial ?? 0, m.via ?? null);
-          result.exclusions_partial += m.exclusions_partial ?? 0; if (m.via === 'legacy') result.via_legacy++;
+          if (m.exclusions_partial === 2) { result.exclusions_unmatched++; unmatched.add(m.phrase); } else result.exclusions_partial += m.exclusions_partial ?? 0; if (m.via === 'legacy') result.via_legacy++;
           if (m.remarks_override) result.remarks_override[m.remarks_override === 1 ? 'applied' : 'unparsed']++;
           result.phrases++; result.by_type[m.match_type]++; result.code_doubtful += m.code_doubtful;
           if (!ng) for (const c of m.undergrad_majors) if (!admitted.has(c)) { admitted.add(c); insU.run(dump.notice_id, r.cols.dept_code, r.cols.position_code, c, m.seq); }
           if (m.match_type === 'unresolved' || m.match_type === 'related') {
             ok = false;
             const key = `${m.level}\t${m.phrase}`;
-            const a = agg.get(key) ?? { phrase: m.phrase, level: m.level, match_type: m.match_type, positions: 0, hires: 0 };
+            const a = agg.get(key) ?? { phrase: m.phrase, level: m.level, match_type: m.match_type, positions: 0, hires: 0, ...(m.exclusions_partial === 2 ? { note: '排除项未对上' } : {}) };
             a.positions++; a.hires += Number.isFinite(hires) ? hires : 0; agg.set(key, a);
           }
         }
@@ -152,11 +153,12 @@ export function ingest(opts: { dbPath?: string; dump?: PositionsDump; rulesCsv?:
       }
     })();
     result.undergrad.distinct_majors = ugMajors.size;
+    result.exclusions_unmatched_distinct = unmatched.size;
     result.unresolved = [...agg.values()].sort((a, b) => b.positions - a.positions || b.hires - a.hires);
 
     mkdirSync(outDir, { recursive: true });
     writeFileSync(join(outDir, `${dump.notice_id}_unresolved_majors.csv`), ['phrase,level,match_type,positions,hires,suggest_catalog,suggest_major_code,suggest_match_type,note',
-      ...result.unresolved.map((u) => [u.phrase, u.level, u.match_type, u.positions, u.hires, '', '', '', ''].map(csvCell).join(','))].join('\n') + '\n');
+      ...result.unresolved.map((u) => [u.phrase, u.level, u.match_type, u.positions, u.hires, '', '', '', u.note ?? ''].map(csvCell).join(','))].join('\n') + '\n');
     const { unresolved, ...stats } = result;
     writeFileSync(join(outDir, `${dump.notice_id}_match_stats.json`), JSON.stringify({ ...stats, notice: GK2027.id, age, source: dump.source, file: dump.file, sha256: dump.sha256, unresolved_phrases: unresolved.length, at: now }, null, 2));
     console.log(`[gwy] 本科 basis: ${JSON.stringify(result.undergrad)}; 需读研后报考: ${JSON.stringify(result.needs_grad)}; code_doubtful phrases: ${result.code_doubtful}`);

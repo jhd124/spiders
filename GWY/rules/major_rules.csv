@@ -23,3 +23,7 @@ phrase,level,catalog,major_code,match_type,note,reviewer,source,context
 会计（学）,any,,120203K|grad:1253,exact,本科会计学，研究生1253会计,expert,专家规则,
 审计（学）,any,,120207|grad:1257,exact,本科审计学，研究生1257审计,expert,专家规则,
 工商管理学（不含市场营销、人力资源管理、物流管理）,any,,grad:1202|grad:1251,category,研究生 1202工商管理学（+1251工商管理）,expert,专家规则,
+动植物检疫（植物检疫方向）,any,,090403T,exact,本科090403T动植物检疫（专家 2026-10-16）,expert,专家规则,
+动植物检疫（动物检疫方向）,any,,090403T,exact,本科090403T动植物检疫（专家 2026-10-16）,expert,专家规则,
+气象类,any,,0706|grad:0706,category,本科0706大气科学类；研究生0706大气科学（专家 2026-10-16）,expert,专家规则,
+法学类,any,,0301|grad:0301,category,A5 法学类（不含政治学类…）= 本科0301法学类 / 研究生0301法学；本类外的排除项按专家规则忽略,expert,专家规则,

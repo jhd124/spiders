@@ -118,7 +118,7 @@ export interface Catalogs {
   gradLegacy?: Map<string, string[]>;
 }
 export interface Rule { id: number; source?: string | null; context?: string | null; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
-export interface Target { catalog: 'undergrad' | 'grad'; code: string; kind: 'major' | 'class' | 'category' | 'discipline' }
+export interface Target { catalog: 'undergrad' | 'grad'; code: string; kind: 'major' | 'class' | 'category' | 'discipline'; /** a major left after subtracting from a class/category */ fromClass?: boolean }
 export interface Match {
   seq: number; level: Level; phrase: string;
   /** segment the phrase was matched in: the printed 本科/研究生 prefix, else inferred from 学历 */
@@ -131,10 +131,11 @@ export interface Match {
   undergrad_majors: string[];
   /** 0 none; 1 the position's 备注 listed this phrase's majors and they were used; 2 detected but unparseable → unresolved */
   remarks_override?: 0 | 1 | 2;
-  /** 1 = some excluded / listed sub-items (不含… / 专业应为…) were not found in the catalog and were ignored (排除项未全部对上) */
+  /** 1 = an expert rule's 不含 item / a listed sub-item (专业应为…) was not found and was ignored (排除项未全部对上);
+   *  2 = a 不含/除外 item could not be matched → the whole phrase is unresolved (排除项未对上: under-count rather than over-count) */
   exclusions_partial?: number;
   /** how it matched: rule | legacy (旧二级学科 → 2022 parent) | catalog | remarks */
-  via?: 'rule' | 'legacy' | 'catalog' | 'remarks' | null;
+  via?: 'rule' | 'legacy' | 'catalog' | 'remarks' | 'modifier' | null;
 }
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -267,7 +268,8 @@ export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: 
   const headName = splitCodes(h0).name.replace(/(?<=.{2})专业$/, '');
   const ruleFor = (key: string) => rules.find((x) => x.phrase === key && (x.level === level || x.level === 'any') && (!x.context || siblings.includes(x.context)));
   // exact phrase first; else the phrase head without its bracket / 专业 suffix (「经济金融类专业（不含…）」 → 经济金融类)
-  const r = ruleFor(phrase) ?? ruleFor(h0) ?? ruleFor(headName);
+  // an include bracket (「法学类（法学）」) restricts the head, so only an exact-phrase rule applies then
+  const r = ruleFor(phrase) ?? (q0?.kind === 'include' ? undefined : ruleFor(h0) ?? ruleFor(headName));
   if (r) {
     const codes = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean);
     const ts = codes.filter((c) => !c.startsWith('-')).map((c) => ruleTarget(c, r.catalog, cat));
@@ -285,6 +287,7 @@ export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: 
   if (RELATED.test(h0)) return out([], 'related');
   const r2 = matchName(phrase, seg, cat);
   if (!r2 && q0?.kind === 'include' && RELATED.test(phrase.slice(h0.length))) return out([], 'related');
+  if (r2?.partial === 2) return out([], 'unresolved', r2.doubtful, null, { exclusions_partial: 2, via: null });
   return r2 ? out(r2.targets, r2.targets.every((t) => t.kind !== 'major' && t.kind !== 'discipline') ? 'category' : 'exact', r2.doubtful, null, { exclusions_partial: r2.partial, via: r2.via }) : out([], 'unresolved');
 }
 
@@ -297,12 +300,24 @@ export function subtractUndergrad(targets: Target[], minusCodes: string[], exclu
   for (const it of excludeNames) {
     const { codes: ic, name } = splitCodes(it);
     const n = name.replace(/(?<=.{2})专业$/, '');
+    const sfx = suffixFilter(n);
+    if (sfx) { for (const m of [...pool]) if (sfx(m)) pool.delete(m); continue; }
     const hit = [...cat.majors.keys()].filter((c) => cat.majors.get(c) === n || ic.some((x) => base(c) === base(x)))
       .concat(byName(cat.classes, n).flatMap((k) => [...cat.majors.keys()].filter((c) => c.startsWith(k))));
     if (!hit.length) { partial = 1; continue; } // not in the catalog: ignored, flagged (排除项未全部对上)
     for (const h of hit) pool.delete(h);
   }
-  return { targets: [...[...pool].sort().map((code): Target => ({ catalog: 'undergrad', code, kind: 'major' })), ...targets.filter((t) => t.catalog === 'grad')], partial };
+  return { targets: [...[...pool].sort().map((code): Target => ({ catalog: 'undergrad', code, kind: 'major', fromClass: true })), ...targets.filter((t) => t.catalog === 'grad')], partial };
+}
+
+/** 不含特设专业 → codes with T; 不含国家控制布点专业 → K; 不含特设控制布点专业 → both T and K. null = not a suffix term */
+export function suffixFilter(term: string): ((code: string) => boolean) | null {
+  const t = term.replace(/(?<=.{2})专业$/, '');
+  const sf = (c: string) => c.replace(/^\d+/, '');
+  if (t === '特设控制布点') return (c) => /T/.test(sf(c)) && /K/.test(sf(c));
+  if (t === '国家控制布点') return (c) => /K/.test(sf(c));
+  if (t === '特设') return (c) => /T/.test(sf(c));
+  return null;
 }
 
 const agrees = (t: Target, c: string, prefix = false) => t.code === c || base(t.code) === c || (prefix && (t.code.startsWith(c) || c.startsWith(t.code)));
@@ -390,10 +405,12 @@ function matchName(phrase: string, seg: Level, cat: Catalogs): { targets: Target
   }
   if (!q || q.kind === 'codes') return { targets: cands, doubtful, partial: 0, via };
   if (q.kind === 'exclude') {
-    // 「XX类（不含A、B）」: the class minus the exclusions found in the catalog; unknown ones are ignored and flagged
-    if (!cands.some((t) => t.catalog === 'undergrad' && t.kind !== 'major')) return { targets: cands, doubtful, partial: 1, via };
+    // 「XX类（不含A、B）」: the class minus the exclusions (names / classes / 特设·控制布点 suffix terms);
+    // any exclusion that cannot be matched makes the whole phrase unresolved (排除项未对上, expert ruling 2026-10-16)
+    if (!cands.some((t) => t.catalog === 'undergrad' && t.kind !== 'major')) return { targets: [], doubtful, partial: 2, via };
     const sub = subtractUndergrad(cands, [], q.items, cat);
-    return sub.targets.length ? { targets: sub.targets, doubtful, partial: sub.partial, via } : null;
+    if (sub.partial) return { targets: [], doubtful, partial: 2, via };
+    return sub.targets.length ? { targets: sub.targets, doubtful, partial: 0, via } : null;
   }
   // include list
   const gradT = cands.filter((t) => t.catalog === 'grad');
@@ -429,7 +446,9 @@ export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], edu
   if (!text.trim()) return [{ seq: 0, ...matchPhrase('', 'any', cat, [], segment), match_type: 'unresolved' }];
   const items = splitMajors(text);
   const siblings = items.map((x) => splitCodes(x.phrase).name);
-  return items.map((x, seq) => {
+  const mods = suffixModifiers(items.map((x) => x.phrase));
+  const ms = items.map((x, seq): Match | null => {
+    if (mods.has(seq)) return null;
     const m: Match = { seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment, siblings), remarks_override: 0 };
     if (UNLIMITED.test(x.phrase)) return m;
     const items = remarksList(x.phrase, remarks);
@@ -442,8 +461,38 @@ export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], edu
     return { ...m, rule_id: null, targets, catalog: cats.length === 1 ? cats[0]! : null, code_doubtful: parts.some((p) => p.code_doubtful) ? 1 : 0,
       major_code: targets.map((t) => (cats.length > 1 ? `${t.catalog}:${t.code}` : t.code)).join('|'),
       match_type: parts.every((p) => p.match_type === 'category') ? 'category' : 'exact',
-      undergrad_majors: [...new Set(parts.flatMap((p) => p.undergrad_majors))].sort(), remarks_override: 1, via: 'remarks' };
+      undergrad_majors: [...new Set(parts.flatMap((p) => p.undergrad_majors))].sort(), remarks_override: 1, via: 'remarks' } as Match;
   });
+  // 「以上各专业类别均不含特设专业、国家控制布点专业…」: applies to the class/category expansions of the phrases before it
+  return ms.map((m, seq): Match => {
+    if (m) return m;
+    const { start, filters } = mods.get(seq)!;
+    const before = ms.slice(0, start).filter((x): x is Match => !!x);
+    const expanded = before.filter((x) => x.segment !== 'grad' && x.targets.some((t) => t.catalog === 'undergrad' && (t.kind !== 'major' || t.fromClass)));
+    const base: Match = { seq, ...matchPhrase('', items[seq]!.level, cat, [], segment), phrase: items[seq]!.phrase, remarks_override: 0 };
+    if (!expanded.length) return { ...base, match_type: 'unresolved' as MatchType };
+    if (seq === start) for (const x of expanded) {
+      const named = new Set(x.targets.filter((t) => t.catalog === 'undergrad' && t.kind === 'major' && !t.fromClass).map((t) => t.code));
+      x.undergrad_majors = x.undergrad_majors.filter((c) => named.has(c) || !filters.some((f) => f(c)));
+    }
+    return { ...base, match_type: 'exact' as MatchType, via: 'modifier' as const };
+  });
+}
+
+/** seq → modifier: a standalone 「以上…均不含特设专业」 and the bare 「国家控制布点专业」… items continuing its list */
+function suffixModifiers(phrases: string[]): Map<number, { start: number; filters: ((c: string) => boolean)[] }> {
+  const out = new Map<number, { start: number; filters: ((c: string) => boolean)[] }>();
+  for (let i = 0; i < phrases.length; i++) {
+    const m = phrases[i]!.match(/^(?:以上)?(?:各|所有)?(?:专业)?(?:类别)?(?:均|都|皆)?(?:不含|不包括)(.+)$/);
+    const f = m && suffixFilter(m[1]!);
+    if (!f) continue;
+    const filters = [f];
+    let j = i + 1;
+    for (; j < phrases.length; j++) { const g = suffixFilter(phrases[j]!); if (!g) break; filters.push(g); }
+    for (let k = i; k < j; k++) out.set(k, { start: i, filters });
+    i = j - 1;
+  }
+  return out;
 }
 
 /** CSV with a header row; quotes "…" with "" escapes. */
