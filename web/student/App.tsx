@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, href, type MajorDetail, type MajorForOcc, type MajorItem, type Occ, type OccDetail, type CourseRef } from './api';
+import { api, href, type MajorDetail, type MajorForOcc, type MajorItem, type Occ, type OccDetail, type CourseRef, type GwyForMajor } from './api';
 
 const FOOTER = '本结果依据各校公开的培养方案和招聘数据，反映的是课程设置，不代表教学质量或就业结果。目前只收录了 3 所试点学校。';
 
@@ -211,9 +211,29 @@ function MajorPage({ school, major }: { school: string; major: string }) {
             </a></li>))}
           </ul>
           {d.not_covered.length > 0 && <p className="muted small fold">课程基本不涉及：{d.not_covered.join('、')}</p>}
+          <GwyBlock major={d.major_code} />
         </>)}
       </Loaded>
     </>
+  );
+}
+
+/** 能报考的国考岗位: hidden when the API has no 国考 data (404) */
+function GwyBlock({ major }: { major: string }) {
+  const s = useLoad(() => api.gwy(major), [major]);
+  if (!s.data) return null;
+  const g: GwyForMajor = s.data, u = g.undergrad;
+  return (
+    <section className="gwy">
+      <h2>能报考的国考岗位</h2>
+      <div className="gwy-main"><b>{u.positions}</b> 个岗位<span className="muted">，共招 {u.hires} 人（本科学历即可报考）</span></div>
+      <ul className="gwy-stats">
+        <li>要求中共党员 <b>{u.party.positions}</b> 个<span className="muted">（{u.party.pct}%）</span></li>
+        <li>限应届毕业生 <b>{u.fresh_grad.positions}</b> 个<span className="muted">（{u.fresh_grad.pct}%）</span></li>
+      </ul>
+      <div className="gwy-grad"><span>需读研后报考</span><b>{g.needs_grad.positions}</b> 个岗位<span className="muted">，共招 {g.needs_grad.hires} 人</span></div>
+      <p className="muted small">{g.note}</p>
+    </section>
   );
 }
 

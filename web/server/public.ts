@@ -5,10 +5,12 @@
  *   GET /api/public/occupation/:code/major/:school/:major   per core skill: courses with 必修/限选/任选 badge
  *   GET /api/public/majors                              school x major list
  *   GET /api/public/major/:school/:major                occupations ranked by core coverage
+ *   GET /api/public/gwy/major/:major                    能报考的国考岗位 for a 本科 major code (GWY/public.ts)
  */
 import { existsSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { Hono } from 'hono';
+import { publicGwyForMajor } from '../../GWY/public.js';
 import { CAREER_DB } from '../../CAREER/db.js';
 import { FOOTER, publicMajor, publicMajorForOccupation, publicMajors, publicOccupation, publicOccupations } from '../../CAREER/public.js';
 
@@ -33,4 +35,5 @@ publicApi.get('/occupation/:code/major/:school/:major', (c) =>
   send(c, ro((db) => publicMajorForOccupation(db, c.req.param('code'), decodeURIComponent(c.req.param('school')), c.req.param('major')))));
 publicApi.get('/majors', (c) => send(c, ro(publicMajors)));
 publicApi.get('/major/:school/:major', (c) => send(c, ro((db) => publicMajor(db, decodeURIComponent(c.req.param('school')), c.req.param('major')))));
+publicApi.get('/gwy/major/:major', (c) => send(c, ro((db) => publicGwyForMajor(db, c.req.param('major')))));
 publicApi.all('*', (c) => c.json({ error: 'not found' }, 404));

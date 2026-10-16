@@ -46,3 +46,10 @@ h3 { font-size: 15px; margin: 0 0 6px; }
 .more { width: 100%; margin-top: 8px; padding: 10px; border: 1px dashed #b6cffb; background: #fff; color: #1f6feb; border-radius: 10px; font-size: 14px; }
 .bars li { grid-template-columns: 8.5em 1fr 3.2em; }
 .legend { margin: -4px 0 8px; } .fold { margin-top: 12px; line-height: 1.6; }
+
+.gwy { margin-top: 20px; background: #fff; border: 1px solid #eceef1; border-radius: 12px; padding: 12px 14px; }
+.gwy h2 { margin-top: 0; }
+.gwy-main b { font-size: 24px; margin-right: 2px; }
+.gwy-stats { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
+.gwy-grad { border-top: 1px dashed #eceef1; padding-top: 8px; margin-top: 4px; }
+.gwy-grad span:first-child { display: inline-block; background: #f3f4f6; border-radius: 6px; padding: 1px 6px; margin-right: 6px; font-size: 12px; }
