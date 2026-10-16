@@ -297,7 +297,14 @@ export function subtractUndergrad(targets: Target[], minusCodes: string[], exclu
   const pool = new Set(ug.flatMap((t) => expandUndergrad(t, cat)));
   let partial = 0;
   for (const c of minusCodes) for (const m of [...pool]) if (m === c || base(m) === base(c) || m.startsWith(c)) pool.delete(m);
-  for (const it of excludeNames) {
+  // 「财政学类和保险学」: split on 和/及 only when every piece is an exact catalog name; never on 与 (expert 2026-10-16)
+  const exact = (x: string) => { const n = splitCodes(x).name.replace(/(?<=.{2})专业$/, ''); return !!n && (byName(cat.majors, n).length > 0 || byName(cat.classes, n).length > 0 || !!suffixFilter(n)); };
+  const pieces = excludeNames.flatMap((it) => {
+    if (exact(it)) return [it];
+    const ps = it.split(/[和及]/).map((x) => x.trim());
+    return ps.length > 1 && ps.every(exact) ? ps : [it];
+  });
+  for (const it of pieces) {
     const { codes: ic, name } = splitCodes(it);
     const n = name.replace(/(?<=.{2})专业$/, '');
     const sfx = suffixFilter(n);

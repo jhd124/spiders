@@ -334,3 +334,14 @@ test('suffix exclusions and 排除项未对上 (expert 2026-10-16)', () => {
   assert.deepEqual(ms[0]!.undergrad_majors, ['071201', '071202']);
   assert.equal(ms[2]!.via, 'modifier'); assert.equal(ms[3]!.via, 'modifier');
 });
+
+test('exclusions split on 和/及 only when every piece is a catalog name (expert 2026-10-16)', () => {
+  const cat: Catalogs = { majors: new Map([['020101', '经济学'], ['020102', '经济统计学'], ['020201K', '财政学'], ['020303', '保险学'], ['080601', '电气工程及其自动化'], ['080602T', '智能电网信息工程']]),
+    classes: new Map([['0201', '经济学类'], ['0202', '财政学类'], ['0806', '电气类']]), grad: new Map(), ugCategories: new Map() };
+  const e = matchPhrase('经济学类（财政学类和保险学除外）', 'any', cat, [], 'undergrad');
+  assert.deepEqual([e.match_type, e.undergrad_majors, e.exclusions_partial], ['exact', ['020101', '020102'], 0], 'neither item is in 0201 → whole class');
+  assert.deepEqual(matchPhrase('经济学类（不含经济学及经济统计学）', 'any', cat, [], 'undergrad').match_type, 'unresolved', 'empty after subtraction');
+  assert.deepEqual(matchPhrase('电气类（不含电气工程及其自动化）', 'any', cat, [], 'undergrad').undergrad_majors, ['080602T'], 'name containing 及 is not split');
+  const u = matchPhrase('经济学类（不含经济学和火星学）', 'any', cat, [], 'undergrad');
+  assert.deepEqual([u.match_type, u.exclusions_partial], ['unresolved', 2], 'a piece not in the catalog → kept unsplit → 排除项未对上');
+});
