@@ -94,8 +94,8 @@ test('apply map on fixtures + samples + stem pending', () => {
   const hitAi = db.prepare(`SELECT group_concat(m.major_code,'|') codes FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id
     WHERE t.school_code='H213' AND t.major_name_raw LIKE '%AI%' GROUP BY t.id`).get() as { codes: string };
   assert.match(hitAi.codes, /080717T/);
-  assert.equal(db.prepare(`SELECT count(*) n FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id WHERE t.major_name_raw LIKE '智能建造%'`).get().n, 0);
-  assert.equal(db.prepare(`SELECT count(*) n FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id WHERE t.major_name_raw='工程软件'`).get().n, 1);
+  assert.equal((db.prepare(`SELECT count(*) n FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id WHERE t.major_name_raw LIKE '智能建造%'`).get() as { n: number }).n, 0);
+  assert.equal((db.prepare(`SELECT count(*) n FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id WHERE t.major_name_raw='工程软件'`).get() as { n: number }).n, 1);
   const special = db.prepare(`SELECT count(*) n FROM gaokao_toudang_major m JOIN gaokao_toudang t ON t.id=m.toudang_id WHERE t.is_ordinary=0`).get() as { n: number };
   assert.equal(special.n, 0, 'special rows never mapped');
   const samples = sampleMappedRows(db, 3);
