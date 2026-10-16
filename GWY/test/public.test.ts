@@ -56,3 +56,14 @@ test('API', async () => {
   assert.equal(j.undergrad.positions, 3); assert.equal(j.note, '来源：2027 年度国考职位表；部分岗位的专业要求尚未归类');
   assert.equal((await publicApi.request('/gwy/major/080901', { method: 'POST' })).status, 405);
 });
+
+test('grad_pathway.csv loader (stub)', async () => {
+  const { loadGradPathway, GRAD_PATHWAY_CSV } = await import('../public.js');
+  const { writeFileSync } = await import('node:fs');
+  assert.ok(loadGradPathway(GRAD_PATHWAY_CSV) instanceof Map, 'committed template parses');
+  const f = join(TMP, 'gp.csv');
+  writeFileSync(f, '# c\nug_class,ug_class_name,grad_code,grad_kind,note,reviewer,source,reviewed\n0809,计算机类,0812,academic,,e,专家规则,1\n0809,计算机类,0854,professional,,e,专家规则,0\n');
+  assert.deepEqual(loadGradPathway(f).get('0809')!.map((x) => [x.grad_code, x.grad_kind, x.reviewed]), [['0812', 'academic', true], ['0854', 'professional', false]]);
+  writeFileSync(f, 'ug_class,ug_class_name,grad_code,grad_kind\n0809,计算机类,812,academic\n');
+  assert.throws(() => loadGradPathway(f), /bad row/);
+});

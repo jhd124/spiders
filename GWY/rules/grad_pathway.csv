@@ -1,0 +1,7 @@
+# 本科专业类 → 对口的研究生一级学科 / 专业学位类别（「读对口研究生后可报」）。待专家填写；空表时只按现有逻辑计数。
+# ug_class      本科专业类代码（4位，2020版本科目录），如 0809
+# ug_class_name 本科专业类名称（核对用），如 计算机类
+# grad_code     2022 研究生目录代码：一级学科 4 位（0812）或专业学位类别 4 位（0854）；一行一个
+# grad_kind     academic（一级学科）| professional（专硕类别）
+# note / reviewer / source / reviewed   说明；审核人；依据（专家规则）；1 = 已审
+ug_class,ug_class_name,grad_code,grad_kind,note,reviewer,source,reviewed

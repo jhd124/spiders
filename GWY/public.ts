@@ -3,9 +3,28 @@
  *  - 本科 basis: gwy_position_undergrad_major (needs_grad = 0 positions whose 专业 admits the major, classes expanded)
  *  - 党员: 政治面貌 is exactly 中共党员 (「中共党员或共青团员」 does not require 党员)
  *  - 限应届: 备注 restricts to 应届/20xx届 高校毕业生 (「非应届…」 clauses are ignored)
- *  - 需读研后报考: needs_grad = 1 positions whose 专业 lists this 本科 major (or its 专业类 / 门类) for the 本科 stage
+ *  - 需读研后报考 (UI: 读对口研究生后可报): needs_grad = 1 positions whose 专业 lists this 本科 major (or its 专业类 / 门类) for the 本科 stage
  */
 import type Database from 'better-sqlite3';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseCsv } from './parse.js';
+
+/** 本科专业类 → 对口研究生 一级学科/专硕类别 (expert table, next step; not used in counts yet) */
+export const GRAD_PATHWAY_CSV = join(dirname(fileURLToPath(import.meta.url)), 'rules', 'grad_pathway.csv');
+export interface GradPathway { ug_class: string; grad_code: string; grad_kind: 'academic' | 'professional'; reviewed: boolean }
+export function loadGradPathway(path = GRAD_PATHWAY_CSV): Map<string, GradPathway[]> {
+  const out = new Map<string, GradPathway[]>();
+  if (!existsSync(path)) return out;
+  const text = readFileSync(path, 'utf8').split('\n').filter((l) => !l.startsWith('#')).join('\n');
+  for (const r of parseCsv(text)) {
+    const ug = (r.ug_class ?? '').trim(), g = (r.grad_code ?? '').trim(), k = (r.grad_kind ?? '').trim();
+    if (!/^\d{4}$/.test(ug) || !/^\d{4}$/.test(g) || (k !== 'academic' && k !== 'professional')) { if (ug || g) throw new Error(`grad_pathway.csv: bad row ${JSON.stringify(r)}`); continue; }
+    out.set(ug, [...(out.get(ug) ?? []), { ug_class: ug, grad_code: g, grad_kind: k, reviewed: r.reviewed === '1' }]);
+  }
+  return out;
+}
 
 export const GWY_SOURCE_NOTE = '来源：2027 年度国考职位表；部分岗位的专业要求尚未归类';
 
@@ -55,3 +74,7 @@ export function publicGwyForMajor(db: Database.Database, major: string, noticeId
     note: GWY_SOURCE_NOTE,
   };
 }
+
+/* Next step (not implemented): once grad_pathway.csv is filled, 需读研 positions whose 研究生-catalog codes (catalog grad or
+ * 'grad:' tokens; 4-digit 一级学科/专硕类别, or a 2-digit 门类 only if the expert says so) intersect
+ * loadGradPathway().get(major.slice(0, 4)) are added to needs_grad, de-duplicated by position. */

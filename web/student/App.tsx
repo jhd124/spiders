@@ -229,9 +229,9 @@ function GwyBlock({ major }: { major: string }) {
       <div className="gwy-main"><b>{u.positions}</b> 个岗位<span className="muted">，共招 {u.hires} 人（本科学历即可报考）</span></div>
       <ul className="gwy-stats">
         <li>要求中共党员 <b>{u.party.positions}</b> 个<span className="muted">（{u.party.pct}%）</span></li>
-        <li>限应届毕业生 <b>{u.fresh_grad.positions}</b> 个<span className="muted">（{u.fresh_grad.pct}%）</span></li>
+        <li>限应届毕业生 <b>{u.fresh_grad.positions}</b> 个<span className="muted">（{u.fresh_grad.pct}%）</span><span className="muted small gwy-hint">应届毕业生的范围以当年公告为准</span></li>
       </ul>
-      <div className="gwy-grad"><span>需读研后报考</span><b>{g.needs_grad.positions}</b> 个岗位<span className="muted">，共招 {g.needs_grad.hires} 人</span></div>
+      <div className="gwy-grad"><span>读对口研究生后可报</span><b>{g.needs_grad.positions}</b> 个岗位<span className="muted">，共招 {g.needs_grad.hires} 人</span></div>
       <p className="muted small">{g.note}</p>
     </section>
   );
