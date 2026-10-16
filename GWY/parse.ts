@@ -115,7 +115,7 @@ export interface Catalogs {
   /** 研究生: code → name (门类 2 digits, 一级学科/专业学位类别 4 digits) */
   grad: Map<string, string>;
 }
-export interface Rule { id: number; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
+export interface Rule { id: number; source?: string | null; phrase: string; level: Level; catalog: 'undergrad' | 'grad' | null; major_code: string | null; match_type: MatchType }
 export interface Target { catalog: 'undergrad' | 'grad'; code: string; kind: 'major' | 'class' | 'category' | 'discipline' }
 export interface Match {
   seq: number; level: Level; phrase: string;
@@ -127,6 +127,22 @@ export interface Match {
   targets: Target[];
   /** 本科 majors this phrase admits (classes/categories expanded); [] for 研究生 matches */
   undergrad_majors: string[];
+  /** 0 none; 1 the position's 备注 listed this phrase's majors and they were used; 2 detected but unparseable → unresolved */
+  remarks_override?: 0 | 1 | 2;
+}
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * 备注 that spells out what a phrase includes, e.g. 「财会审计类专业包括会计学、审计学、财务管理」 or
+ * 「社会保障类（含劳动与社会保障、社会工作）」. Returns the listed items, [] when a list is announced but empty, null if none.
+ */
+export function remarksList(phrase: string, remarks: string): string[] | null {
+  const name = splitCodes(phrase).name;
+  if (!name || !remarks || !remarks.includes(name)) return null;
+  const m = remarks.match(new RegExp(`${esc(name)}(?:专业)?(?:[（(](?:包括|包含|含|指|即)[:：]?([^）)]*)[）)]|(?:包括|包含|含|是指|指|为|即)[:：]?([^。；;\n]*))`));
+  if (!m) return null;
+  const list = (m[1] ?? m[2] ?? '').replace(/等(?:专业)?$|专业$/, '');
+  return list.split(/[、，,;；]|或/).map((x) => x.trim().replace(/专业$/, '')).filter(Boolean);
 }
 
 const LEVEL_PREFIX: [RegExp, Level][] = [
@@ -173,7 +189,8 @@ export function splitCodes(phrase: string): { codes: string[]; name: string } {
   let s = phrase.trim(), codes: string[] = [];
   const lead = s.match(/^[（(]\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/\s]*\s*)+)[）)]\s*/) ?? s.match(/^((?:\d{2,6}[A-Z]{0,2}[、/]?)+)(?=[\u4e00-\u9fa5])/);
   if (lead) { codes = lead[1]!.match(CODE) ?? []; s = s.slice(lead[0].length); }
-  const tail = s.match(/\s*[（(]\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/\s]*\s*)+)[）)]\s*$/);
+  // 「计算机类（0809）」「会计学（专业代码120203K）」「软件工程0835」
+  const tail = s.match(/\s*[（(]\s*(?:专业代码|代码)?[:：]?\s*((?:\d{2,6}[A-Z]{0,2}\s*[、，,/\s]*\s*)+)[）)]\s*$/) ?? s.match(/(?<=[\u4e00-\u9fa5])((?:\d{4}|\d{6}[A-Z]{0,2}))$/);
   if (tail) { codes.push(...(tail[1]!.match(CODE) ?? [])); s = s.slice(0, tail.index); }
   return { codes, name: s.replace(/^(?:一级学科|学科门类|专业学位类别|门类)[:：]?/, '').trim() };
 }
@@ -185,12 +202,13 @@ export function expandUndergrad(t: Target, cat: Catalogs): string[] {
   return [...cat.majors.keys()].filter((c) => c.startsWith(t.code)).sort();
 }
 /** a code from a rule row: 6 digits → 本科专业, 4 → 专业类 (本科) / 一级学科 (研究生), 2 → 门类 */
-function ruleTarget(code: string, catalog: Rule['catalog'], cat: Catalogs): Target | null {
+function ruleTarget(code: string, catalog: Rule['catalog'], cat: Catalogs): Target & { known: boolean } {
   const c = code.replace(/^(undergrad|grad):/, '');
   const cl = code.startsWith('grad:') ? 'grad' : code.startsWith('undergrad:') ? 'undergrad' : catalog ?? (c.length === 4 && !cat.classes.has(c) ? 'grad' : 'undergrad');
-  if (cl === 'grad') return cat.grad.has(c) || !cat.grad.size ? { catalog: 'grad', code: c, kind: c.length === 2 ? 'category' : 'discipline' } : null;
-  if (c.length >= 6) return { catalog: 'undergrad', code: [...cat.majors.keys()].find((k) => k === c || base(k) === c) ?? c, kind: 'major' };
-  return { catalog: 'undergrad', code: c, kind: c.length === 4 ? 'class' : 'category' };
+  // expert codes are kept as given even when our catalog lacks them (e.g. old 二级学科 120201); known = false flags them
+  if (cl === 'grad') return { catalog: 'grad', code: c, kind: c.length === 2 ? 'category' : 'discipline', known: cat.grad.has(c) };
+  if (c.length >= 6) { const k = [...cat.majors.keys()].find((x) => x === c || base(x) === c); return { catalog: 'undergrad', code: k ?? c, kind: 'major', known: !!k }; }
+  return { catalog: 'undergrad', code: c, kind: c.length === 4 ? 'class' : 'category', known: (c.length === 4 ? cat.classes : cat.ugCategories ?? new Map()).has(c) };
 }
 
 /**
@@ -213,8 +231,8 @@ export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: 
   };
   const r = rules.find((x) => x.phrase === phrase && (x.level === level || x.level === 'any'));
   if (r) {
-    const targets = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean).map((c) => ruleTarget(c, r.catalog, cat)).filter((t): t is Target => !!t);
-    return out(targets, r.match_type, 0, r.id);
+    const ts = (r.major_code ?? '').split('|').map((c) => c.trim()).filter(Boolean).map((c) => ruleTarget(c, r.catalog, cat));
+    return out(ts.map(({ known: _k, ...t }) => t), r.match_type, ts.some((t) => !t.known) ? 1 : 0, r.id);
   }
   const { codes, name } = splitCodes(phrase);
   if (UNLIMITED.test(name)) return out([], 'unlimited');
@@ -251,10 +269,24 @@ export function matchPhrase(phrase: string, level: Level, cat: Catalogs, rules: 
   return out(cands, cands.every((t) => t.kind === 'class' || t.kind === 'category') ? 'category' : 'exact', doubtful);
 }
 
-export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], education = ''): Match[] {
+export function matchMajors(text: string, cat: Catalogs, rules: Rule[] = [], education = '', remarks = ''): Match[] {
   const segment = segmentFor(education);
   if (!text.trim()) return [{ seq: 0, ...matchPhrase('', 'any', cat, [], segment), match_type: 'unresolved' }];
-  return splitMajors(text).map((x, seq) => ({ seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment) }));
+  return splitMajors(text).map((x, seq) => {
+    const m: Match = { seq, ...matchPhrase(x.phrase, x.level, cat, rules, segment), remarks_override: 0 };
+    if (UNLIMITED.test(x.phrase)) return m;
+    const items = remarksList(x.phrase, remarks);
+    if (!items) return m;
+    // the position's own list overrides the rule / catalog match; every item must match the catalog by name
+    const parts = items.map((it) => matchPhrase(it, x.level, cat, [], segment));
+    if (!parts.length || parts.some((p) => !p.targets.length)) return { ...m, catalog: null, major_code: null, match_type: 'unresolved', rule_id: null, targets: [], undergrad_majors: [], code_doubtful: 0, remarks_override: 2 };
+    const targets = parts.flatMap((p) => p.targets);
+    const cats = [...new Set(targets.map((t) => t.catalog))];
+    return { ...m, rule_id: null, targets, catalog: cats.length === 1 ? cats[0]! : null, code_doubtful: parts.some((p) => p.code_doubtful) ? 1 : 0,
+      major_code: targets.map((t) => (cats.length > 1 ? `${t.catalog}:${t.code}` : t.code)).join('|'),
+      match_type: parts.every((p) => p.match_type === 'category') ? 'category' : 'exact',
+      undergrad_majors: [...new Set(parts.flatMap((p) => p.undergrad_majors))].sort(), remarks_override: 1 };
+  });
 }
 
 /** CSV with a header row; quotes "…" with "" escapes. */

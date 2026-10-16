@@ -22,3 +22,9 @@ Matching (GWY/parse.ts), expert rulings 2026-10-16 — MOE catalogs only, for �
 `不限` → unlimited; 相关/相近/等专业 → related; no catalog name → unresolved; both go to the unresolved CSV for the expert.
 Expert rules (GWY/rules/major_rules.csv, applied first, reviewed = 1) can map custom names such as 财会审计类 to code lists.
 Empty / headerless sheets (e.g. an empty Sheet1) are ignored silently.
+
+Expert rules part 2: rule rows carry `source` (专家规则). If a position's 备注 spells out what a phrase includes
+(「财会审计类专业包括…」/「社会保障类（含…）」), that list replaces the rule (`remarks_override = 1`); a detected but
+unparseable list makes the phrase unresolved (`remarks_override = 2`). Positions with any unresolved/related phrase get
+`gwy_position.majors_incomplete = 1` and are left out of gwy_position_undergrad_major (major page counts);
+gk2027_match_stats.json → undergrad.positions_incomplete / hires_incomplete backs the note 部分岗位的专业要求尚未归类.

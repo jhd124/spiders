@@ -5,5 +5,8 @@
 # major_code  one or more MOE codes, '|'-separated; 6-digit majors and 4-digit 专业类 / 2-digit 门类 are expanded to their
 #             本科 majors for counts; prefix grad:/undergrad: to mix catalogs, e.g. undergrad:1202|grad:1202
 # match_type  exact | category | unlimited | related | unresolved
+# source      provenance, e.g. 专家规则. A position's 备注 that lists the majors a phrase includes overrides the rule.
 # MOE catalogs only (本科专业目录 / 研究生教育学科专业目录); never training-company category lists.
-phrase,level,catalog,major_code,match_type,note,reviewer
+phrase,level,catalog,major_code,match_type,note,reviewer,source
+财会审计类,any,,120203K|120204|120207|120208|120213T|grad:120201|grad:1253|grad:0257,category,国考自定义类别；grad:120201（原二级学科会计学）、grad:0257 不在2022研究生目录中（code_doubtful）,expert,专家规则
+社会保障类,any,,120403|120401|020303|030302|grad:120404|grad:0352,category,国考自定义类别；grad:120404（原二级学科社会保障）不在2022研究生目录中（code_doubtful）,expert,专家规则
